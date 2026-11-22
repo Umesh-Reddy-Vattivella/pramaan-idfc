@@ -14,7 +14,19 @@ import { baselineStressInputs, runStressTest } from '../lib/engines/stressTest';
 import { buildCaptureCase, CAPTURE_SITE } from '../lib/data/captureTemplate';
 import { extractionToCase, sanitizeExtraction, simulatedExtraction } from '../lib/live/extraction';
 import { buildIdfcPdf } from '../lib/pdf/generateIdfcPdf';
-import { aggregateLiveEvidence, correctionFactor, monthsSince, outlierFlags, pointRate, tierFromDistanceKm } from '../lib/engines/marketEvidence';
+import {
+  aggregateLiveEvidence,
+  correctionFactor,
+  extractRatesFromText,
+  monthsSince,
+  outlierFlags,
+  parseAreaSqft,
+  parseInrAmount,
+  parseRatePerSqft,
+  pointRate,
+  quoteInSource,
+  tierFromDistanceKm,
+} from '../lib/engines/marketEvidence';
 import { buildNewPropertyCase, EMPTY_FORM } from '../lib/data/newPropertyCase';
 import type { MarketDataPoint } from '../lib/types';
 
@@ -160,6 +172,22 @@ console.log('\nLive market evidence engine (Value a New Property)');
   check('No owner capture → not an omission-fraud block', noCap.trust.omissionFraudBlock, false);
   check('Capture completed → Trust passes', evaluateCase(buildNewPropertyCase('live-market-test02', { ...form, captureCompleted: true }, agg, null, 5)).trust.allPassed, true);
 }
+
+console.log('\nPrinted price / area parsers (real formats seen in live search results)');
+check('"₹15 Lac" → 15,00,000', parseInrAmount('₹15 Lac'), 1500000);
+check('"₹1.14 Cr" → 1,14,00,000', parseInrAmount('₹1.14 Cr'), 11400000);
+check('"₹ 24,00,000" → 24,00,000', parseInrAmount('₹ 24,00,000'), 2400000);
+check('"5000 sqft" → 5000', parseAreaSqft('5000 sqft'), 5000);
+check('"200 sq yd" → 1800 sqft', parseAreaSqft('200 sq yd'), 1800);
+check('"1 acre" → 43560 sqft', parseAreaSqft('1 acre'), 43560);
+check('"₹1,200/sqft" → 1200', parseRatePerSqft('₹1,200/sqft'), 1200);
+check('"INR 8.33 K/ sq.ft" → 8330', parseRatePerSqft('INR 8.33 K/ sq.ft'), 8330);
+check('"17500/- per sq.ft" → 17500', parseRatePerSqft('17500/- per sq.ft'), 17500);
+check('"₹45,000 per sq yd" → 5000', parseRatePerSqft('₹45,000 per sq yd'), 5000);
+check('Area without unit → null', parseAreaSqft('5000'), null);
+check('Quote present in source', quoteInSource('₹15 Lac', 'Plots ; ₹15 Lac · 5000 sqft · A'), true);
+check('Invented quote rejected', quoteInSource('₹19 Lac', 'Plots ; ₹15 Lac · 5000 sqft · A'), false);
+check('Regex fallback finds rate', extractRatesFromText('Find this plot at ₹12 Lac (₹1,200/sqft). It spans').map((x) => x.rate).join(','), '1200');
 
 console.log('\n§7.1-6  PDF export builds for every case');
 const outDir = process.argv[2];

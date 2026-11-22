@@ -76,6 +76,7 @@ export default function ValueNewPropertyPage() {
   const [query, setQuery] = useState('');
   const [geo, setGeo] = useState<{ busy: boolean; results: GeoPlace[]; error: string | null }>({ busy: false, results: [], error: null });
   const [snapshot, setSnapshot] = useState<LiveEvidenceSnapshot | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
   const [fetchState, setFetchState] = useState<{ busy: boolean; error: string | null; cached: LiveEvidenceSnapshot | null }>({ busy: false, error: null, cached: null });
 
   useEffect(() => {
@@ -143,6 +144,7 @@ export default function ValueNewPropertyPage() {
       setSnapshot(merged);
       saveSnap(key, merged);
       setFetchState({ busy: false, error: null, cached: null });
+      setWarning((raw as { warning?: string }).warning ?? null);
     } catch (e) {
       setFetchState({ busy: false, error: e instanceof Error ? e.message : 'Live search failed', cached: loadSnaps()[key] ?? null });
     }
@@ -203,7 +205,7 @@ export default function ValueNewPropertyPage() {
       <div>
         <h1 className="text-2xl font-bold text-ink">Value a New Property — Live Market Evidence</h1>
         <p className="text-sm text-slate-500">
-          Any address in India. Live search extracts printed prices with source links; Engine 2 computes every rate, correction, weight and score.
+          Any address in India. Real-time web search (Tavily) + a free AI model that only copies printed prices with their source links (every quote verified); Engine 2 computes every rate, correction, weight and score.
         </p>
       </div>
 
@@ -371,6 +373,7 @@ export default function ValueNewPropertyPage() {
                 )}
               </div>
             )}
+            {warning && <p className="mt-2 rounded bg-remote-bg px-2 py-1 text-[11px] text-remote">{warning}</p>}
             {snapshot && snapshot.queries.length > 0 && (
               <p className="mt-2 text-[11px] text-slate-500">Searches run: {snapshot.queries.map((q) => `"${q}"`).join(' · ')}</p>
             )}
@@ -414,6 +417,7 @@ export default function ValueNewPropertyPage() {
                           <td className="py-1.5 text-right font-semibold tabular-nums">
                             {r === null ? '—' : formatIndianNumber(Math.round(r))}
                             {out && <span className="block text-[10px] font-normal text-remote">outlier — excluded</span>}
+                            {p.quote && <span className="block max-w-[160px] truncate text-[10px] font-normal text-slate-400" title={`Verified quote from source: ${p.quote}`}>“{p.quote}”</span>}
                           </td>
                           <td className="py-1.5 text-right tabular-nums">{d === null ? '—' : `${d.toFixed(1)} km`}</td>
                           <td className="py-1.5">{p.date ?? '—'}</td>

@@ -165,6 +165,7 @@ export interface MarketDataPoint {
   url?: string;
   title?: string;
   origin: 'LIVE_SEARCH' | 'MANUAL';
+  quote?: string; // exact text copied from the source page (verified present in it)
   lat?: number;
   lng?: number;
   distanceKm?: number;

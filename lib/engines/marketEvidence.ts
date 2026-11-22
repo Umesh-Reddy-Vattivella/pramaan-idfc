@@ -50,6 +50,80 @@ function correctionLabel(kind: MarketPointKind): string {
   return 'Floor sanity check only (weight 0%)';
 }
 
+/* ---------------- Deterministic parsers for printed Indian price / area text ---------------- */
+
+const SQFT_PER: { re: RegExp; factor: number }[] = [
+  { re: /(sq\.?\s*(ft|feet|fit)|sqft|sft|square\s*f(ee|oo)t|qs\.?\s*fit|स्क्वेयर\s*फीट)/i, factor: 1 },
+  { re: /(sq\.?\s*(yd|yard)s?|square\s*yards?|gaj|गज)/i, factor: 9 },
+  { re: /(sq\.?\s*m(tr|eter|etre)?s?\b|sqm|square\s*met(er|re)s?|m²)/i, factor: 10.7639 },
+  { re: /\bacres?\b/i, factor: 43560 },
+  { re: /\bhectares?\b/i, factor: 107639 },
+  { re: /\bgunt(h)?as?\b/i, factor: 1089 },
+];
+
+/** Square feet per one unit of the area unit named in the text (null if no recognised unit). */
+export function sqftPerUnit(text: string): number | null {
+  for (const u of SQFT_PER) if (u.re.test(text)) return u.factor;
+  return null;
+}
+
+/**
+ * Parses a printed rupee amount: "₹15 Lac" → 1,500,000 · "₹1.14 Cr" → 11,400,000 ·
+ * "Rs. 24,00,000" → 2,400,000 · "INR 8.33 K" → 8,330. Returns null if no number.
+ */
+export function parseInrAmount(text: string): number | null {
+  const t = text.replace(/,/g, '').replace(/\/-/g, '');
+  const m = t.match(/(\d+(?:\.\d+)?)\s*(crores?|cr\b|lakhs?|lacs?|lac\b|lakh\b|l\b|k\b|thousand)?/i);
+  if (!m) return null;
+  const n = parseFloat(m[1]);
+  const unit = (m[2] ?? '').toLowerCase();
+  const mult = /^cr/.test(unit) ? 1e7 : /^(lakh|lac|l$)/.test(unit) ? 1e5 : /^(k|thousand)/.test(unit) ? 1e3 : 1;
+  const v = Math.round(n * mult * 100) / 100; // exact to the paisa (avoids 1.14 × 1e7 = 11399999.999…)
+  return Number.isFinite(v) && v > 0 ? v : null;
+}
+
+/** Parses a printed area into sqft: "5000 sqft" → 5000 · "200 sq yd" → 1800 · "1 acre" → 43560. */
+export function parseAreaSqft(text: string): number | null {
+  const m = text.replace(/,/g, '').match(/(\d+(?:\.\d+)?)/);
+  const f = sqftPerUnit(text);
+  if (!m || f === null) return null;
+  const v = parseFloat(m[1]) * f;
+  return v > 0 ? v : null;
+}
+
+/** Parses a printed rate into Rs./sqft: "₹1,200/sqft" → 1200 · "INR 8.33 K/ sq.ft" → 8330 · "₹45,000 per sq yd" → 5000. */
+export function parseRatePerSqft(text: string): number | null {
+  const amount = parseInrAmount(text);
+  const f = sqftPerUnit(text);
+  if (amount === null || f === null) return null;
+  return amount / f;
+}
+
+/** Whitespace / case / currency-symbol normalised text for "is this quote really in the source?" checks. */
+export function normaliseForMatch(s: string): string {
+  return s.toLowerCase().replace(/₹|rs\.?|inr/g, '').replace(/[\s,]+/g, '');
+}
+
+/** True if the quoted text appears verbatim (after normalisation) in the source text. */
+export function quoteInSource(quote: string, source: string): boolean {
+  const q = normaliseForMatch(quote);
+  return q.length >= 2 && normaliseForMatch(source).includes(q);
+}
+
+/**
+ * Deterministic fallback extractor (no AI): finds explicit "₹X / sqft"-style rates in text.
+ * Used when the extraction model is unavailable.
+ */
+export function extractRatesFromText(text: string): { rateText: string; rate: number }[] {
+  const re = /(?:₹|rs\.?|inr)\s*\d[\d,.]*\s*(?:k|lakh|lac)?\s*(?:\/-)?\s*(?:\/|per)\s*(?:sq\.?\s*(?:ft|feet|yd|yard|m)|sqft|sft|square\s*(?:feet|yards?))/gi;
+  const out: { rateText: string; rate: number }[] = [];
+  for (const m of text.matchAll(re)) {
+    const rate = parseRatePerSqft(m[0]);
+    if (rate !== null && rate >= 100 && rate <= 500000) out.push({ rateText: m[0].trim(), rate });
+  }
+  return out;
+}
+
 /** Rate per sqft: the printed rate if stated, else price ÷ area. null if neither is usable. */
 export function pointRate(p: MarketDataPoint): number | null {
   if (p.statedRatePerSqft && p.statedRatePerSqft > 0) return p.statedRatePerSqft;
