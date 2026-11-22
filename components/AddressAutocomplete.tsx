@@ -104,6 +104,45 @@ async function googleSuggest(q: string, bias: [number, number] | null): Promise<
     }));
 }
 
+/* ---------------- One-shot geocoding (document addresses) ---------------- */
+
+/** Geocodes free text: Google Geocoder (Maps JS) when available, else the server OpenStreetMap geocoder. */
+export async function geocodeText(q: string): Promise<PickedPlace | null> {
+  if (googleMapsAvailable()) {
+    try {
+      await loadGoogleMaps();
+      const geocoder = new google.maps.Geocoder();
+      const { results } = await geocoder.geocode({ address: q, region: 'IN' });
+      const r = results[0];
+      if (r) {
+        const comp = (t: string) => r.address_components.find((c) => c.types.includes(t))?.long_name;
+        return {
+          lat: r.geometry.location.lat(),
+          lng: r.geometry.location.lng(),
+          displayName: r.formatted_address,
+          locality: comp('sublocality_level_1') ?? comp('sublocality') ?? comp('neighborhood'),
+          city: comp('locality') ?? comp('administrative_area_level_2'),
+          state: comp('administrative_area_level_1'),
+        };
+      }
+    } catch {
+      /* fall back to OpenStreetMap */
+    }
+  }
+  // Try the full text, then progressively shorter tails (deed addresses are often too specific for OSM).
+  const parts = q.split(',').map((x) => x.trim()).filter(Boolean);
+  for (let i = 0; i < Math.min(parts.length, 3); i++) {
+    try {
+      const res = await fetch(`/api/geocode?q=${encodeURIComponent(parts.slice(i).join(', '))}`);
+      const j = (await res.json()) as { results?: PickedPlace[] };
+      if (j.results?.[0]) return j.results[0];
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 /* ---------------- Component ---------------- */
 
 export default function AddressAutocomplete({ onSelect, bias, placeholder }: { onSelect: (p: PickedPlace) => void; bias?: [number, number] | null; placeholder?: string }) {

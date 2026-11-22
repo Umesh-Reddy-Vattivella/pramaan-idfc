@@ -52,13 +52,29 @@ function correctionLabel(kind: MarketPointKind): string {
 
 /* ---------------- Deterministic parsers for printed Indian price / area text ---------------- */
 
+/* Indic numerals (Devanagari, Bengali, Gurmukhi, Gujarati, Tamil, Telugu, Kannada, Malayalam) → ASCII. */
+const INDIC_ZERO = [0x0966, 0x09e6, 0x0a66, 0x0ae6, 0x0be6, 0x0c66, 0x0ce6, 0x0d66];
+
+/** "११२/२" → "112/2", "०.०१६७" → "0.0167". Leaves all other characters unchanged. */
+export function normaliseDigits(s: string): string {
+  let out = '';
+  for (const ch of s) {
+    const cp = ch.codePointAt(0)!;
+    const zero = INDIC_ZERO.find((z) => cp >= z && cp <= z + 9);
+    out += zero === undefined ? ch : String(cp - zero);
+  }
+  return out;
+}
+
+// Unit words in English and Indian languages. NOTE: no \b around Indic words (\b is ASCII-only in JS).
 const SQFT_PER: { re: RegExp; factor: number }[] = [
-  { re: /(sq\.?\s*(ft|feet|fit)|sqft|sft|square\s*f(ee|oo)t|qs\.?\s*fit|स्क्वेयर\s*फीट)/i, factor: 1 },
-  { re: /(sq\.?\s*(yd|yard)s?|square\s*yards?|gaj|गज)/i, factor: 9 },
-  { re: /(sq\.?\s*m(tr|eter|etre)?s?\b|sqm|square\s*met(er|re)s?|m²)/i, factor: 10.7639 },
-  { re: /\bacres?\b/i, factor: 43560 },
-  { re: /\bhectares?\b/i, factor: 107639 },
-  { re: /\bgunt(h)?as?\b/i, factor: 1089 },
+  { re: /(sq\.?\s*(ft|feet|fit)|sqft|sft|square\s*f(ee|oo)t|qs\.?\s*fit|स्क्वेयर\s*फीट|चौ\.?\s*फ[ूु]ट?|चौरस\s*फ[ूु]ट|वर्ग\s*फ[ुी]ट|சதுர\s*அடி|ச\.?\s*அடி)/i, factor: 1 },
+  { re: /(sq\.?\s*(yd|yard)s?|square\s*yards?|gaj|वर्ग\s*गज|गज)/i, factor: 9 },
+  { re: /(sq\.?\s*m(tr|eter|etre)?s?\b|sqm|square\s*met(er|re)s?|m²|चौ\.?\s*मी|चौरस\s*मीटर|वर्ग\s*मीटर|சதுர\s*மீட்டர்|ச\.?\s*மீ)/i, factor: 10.7639 },
+  { re: /(\bacres?\b|एकर|एकड़|ஏக்கர்)/i, factor: 43560 },
+  { re: /(\bhectares?\b|हेक्टर|हेक्टेयर|हे\.?\s*आर|हे\.|ஹெக்டேர்)/i, factor: 107639 },
+  { re: /(\bgunt(h)?as?\b|गुंठ[ाे]?)/i, factor: 1089 },
+  { re: /\bares?\b/i, factor: 1076.39 },
 ];
 
 /** Square feet per one unit of the area unit named in the text (null if no recognised unit). */
@@ -72,7 +88,7 @@ export function sqftPerUnit(text: string): number | null {
  * "Rs. 24,00,000" → 2,400,000 · "INR 8.33 K" → 8,330. Returns null if no number.
  */
 export function parseInrAmount(text: string): number | null {
-  const t = text.replace(/,/g, '').replace(/\/-/g, '');
+  const t = normaliseDigits(text).replace(/,/g, '').replace(/\/-/g, '');
   const m = t.match(/(\d+(?:\.\d+)?)\s*(crores?|cr\b|lakhs?|lacs?|lac\b|lakh\b|l\b|k\b|thousand)?/i);
   if (!m) return null;
   const n = parseFloat(m[1]);
@@ -82,12 +98,22 @@ export function parseInrAmount(text: string): number | null {
   return Number.isFinite(v) && v > 0 ? v : null;
 }
 
-/** Parses a printed area into sqft: "5000 sqft" → 5000 · "200 sq yd" → 1800 · "1 acre" → 43560. */
+/**
+ * Parses a printed area into sqft, pairing each number with ITS OWN unit:
+ * "5000 sqft" → 5000 · "200 sq yd" → 1800 · "1 acre" → 43560 ·
+ * "167.22 sq. m. (1800 sq. ft.)" → 1800 (an explicit sq ft figure is preferred over a conversion).
+ */
 export function parseAreaSqft(text: string): number | null {
-  const m = text.replace(/,/g, '').match(/(\d+(?:\.\d+)?)/);
-  const f = sqftPerUnit(text);
-  if (!m || f === null) return null;
-  const v = parseFloat(m[1]) * f;
+  const t = normaliseDigits(text).replace(/,/g, '');
+  const pairs: { index: number; value: number; factor: number }[] = [];
+  for (const u of SQFT_PER) {
+    const re = new RegExp(`(\\d+(?:\\.\\d+)?)\\s*(?:${u.re.source})`, 'gi');
+    for (const m of t.matchAll(re)) pairs.push({ index: m.index ?? 0, value: parseFloat(m[1]), factor: u.factor });
+  }
+  if (!pairs.length) return null;
+  const sqft = pairs.find((p) => p.factor === 1);
+  const pick = sqft ?? pairs.sort((a, b) => a.index - b.index)[0];
+  const v = Math.round(pick.value * pick.factor * 10000) / 10000;
   return v > 0 ? v : null;
 }
 
@@ -101,7 +127,7 @@ export function parseRatePerSqft(text: string): number | null {
 
 /** Whitespace / case / currency-symbol normalised text for "is this quote really in the source?" checks. */
 export function normaliseForMatch(s: string): string {
-  return s.toLowerCase().replace(/₹|rs\.?|inr/g, '').replace(/[\s,]+/g, '');
+  return normaliseDigits(s).toLowerCase().replace(/₹|rs\.?|inr/g, '').replace(/[\s,]+/g, '');
 }
 
 /** True if the quoted text appears verbatim (after normalisation) in the source text. */

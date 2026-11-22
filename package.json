@@ -7,7 +7,9 @@
     "build": "next build --turbopack",
     "start": "next start",
     "lint": "eslint",
-    "verify": "tsx scripts/verify-engines.ts"
+    "verify": "tsx scripts/verify-engines.ts",
+    "prebuild": "node scripts/copy-pdf-worker.mjs",
+    "predev": "node scripts/copy-pdf-worker.mjs"
   },
   "dependencies": {
     "jspdf": "^4.2.1",
@@ -15,10 +17,12 @@
     "leaflet": "^1.9.4",
     "lucide-react": "^1.77.0",
     "next": "15.5.29",
+    "pdfjs-dist": "^6.5.438",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "react-leaflet": "^5.0.0",
-    "recharts": "^3.11.0"
+    "recharts": "^3.11.0",
+    "sarvamai": "^1.1.21"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",

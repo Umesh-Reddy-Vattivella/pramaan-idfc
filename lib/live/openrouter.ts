@@ -11,6 +11,16 @@ export const OPENROUTER_FREE_CHAIN = [
   'openrouter/free',
 ];
 
+/** Free vision-language models (OCR of scanned documents / photos). */
+export const OPENROUTER_FREE_VISION_CHAIN = [
+  'nvidia/nemotron-3.5-super-vl:free',
+  'google/gemma-4-31b-it:free',
+  'inclusionai/ling-3.2-flash:free',
+  'openrouter/free',
+];
+
+export type ContentPart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } };
+
 export function openRouterChain(): string[] {
   const preferred = process.env.OPENROUTER_MODEL?.trim();
   return preferred ? [preferred, ...OPENROUTER_FREE_CHAIN.filter((m) => m !== preferred)] : OPENROUTER_FREE_CHAIN;
@@ -25,9 +35,15 @@ export class OpenRouterError extends Error {
 /**
  * @param deadline epoch ms after which no further model is tried (keeps the route under the 60 s serverless limit).
  */
-export async function openRouterChat(apiKey: string, system: string, user: string, deadline = Date.now() + 35000): Promise<{ model: string; text: string }> {
+export async function openRouterChat(
+  apiKey: string,
+  system: string,
+  user: string | ContentPart[],
+  deadline = Date.now() + 35000,
+  chain: string[] = openRouterChain(),
+): Promise<{ model: string; text: string }> {
   const attempts: OpenRouterError['attempts'] = [];
-  for (const model of openRouterChain()) {
+  for (const model of chain) {
     const remaining = deadline - Date.now();
     if (remaining < 4000) {
       attempts.push({ model, status: 0, message: 'time budget exhausted' });

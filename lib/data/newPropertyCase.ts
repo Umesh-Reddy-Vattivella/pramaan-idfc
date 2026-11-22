@@ -39,6 +39,12 @@ export interface NewPropertyForm {
   monthlyRentInr: number | null;
   /** Demo toggle: the owner self-capture for this property is treated as completed and passed. */
   captureCompleted: boolean;
+  /** Survey / khasra numbers as listed in the sale deed and in the land record (comma separated). */
+  surveyDeed: string;
+  surveyRecord: string;
+  deedBoundaries: { East: string; West: string; North: string; South: string } | null;
+  /** Documents read by OCR (for the case file). */
+  docsRead: { name: string; docType: string; language: string; method: string }[];
 }
 
 export const EMPTY_FORM: NewPropertyForm = {
@@ -67,6 +73,15 @@ export const EMPTY_FORM: NewPropertyForm = {
   requestedLoanInr: null,
   monthlyRentInr: null,
   captureCompleted: false,
+  surveyDeed: '',
+  surveyRecord: '',
+  deedBoundaries: null,
+  docsRead: [],
+};
+
+const splitList = (s: string) => {
+  const xs = s.split(/[,;]+/).map((x) => x.trim()).filter(Boolean);
+  return xs.length ? xs : undefined;
 };
 
 export function snapshotMode(points: LiveEvidenceSnapshot['points']): LiveEvidenceSnapshot['mode'] {
@@ -138,6 +153,11 @@ export function buildNewPropertyCase(
     trustChecks: { gpsInParcel: ok, liveCameraOnly: ok, deviceAttested: ok, sunAngleMatched: ok, faceMatched: ok, floorCoverageLocked: ok },
 
     liveEvidence: snapshot ?? undefined,
+    surveyDeedNumbers: splitList(f.surveyDeed),
+    surveyPattaNumbers: splitList(f.surveyRecord),
+    vernacularDocsParsed: f.docsRead.length
+      ? f.docsRead.map((d) => ({ language: d.language, docType: `${d.docType} — ${d.name}`, summary: `Read by ${d.method}` }))
+      : undefined,
     esignStatus: 'PENDING',
     details: [
       { label: 'Location', value: f.address || [f.locality, f.city, f.state].filter(Boolean).join(', ') || '—' },
@@ -145,6 +165,10 @@ export function buildNewPropertyCase(
       { label: 'Spatial tier', value: agg.medianDistanceKm === null ? 'No geocoded comparables → District benchmark (penalised)' : `Median comparable distance ${agg.medianDistanceKm.toFixed(2)} km` },
       { label: 'Bias corrections', value: 'Default, uncalibrated: listings × 0.86 · auctions ÷ 0.80 · reported sales × 1.00 (locality calibration happens in pilot)' },
       { label: 'Construction rate', value: 'As entered by the underwriter (as-valued, depreciated)' },
+      ...(f.docsRead.length ? [{ label: 'Documents read (OCR)', value: f.docsRead.map((d) => `${d.docType} (${d.language})`).join(' · ') }] : []),
+      ...(f.deedBoundaries
+        ? [{ label: 'Boundaries (deed)', value: `E: ${f.deedBoundaries.East || '—'} · W: ${f.deedBoundaries.West || '—'} · N: ${f.deedBoundaries.North || '—'} · S: ${f.deedBoundaries.South || '—'} — site match pending owner capture` }]
+        : []),
       {
         label: 'Trust Layer',
         value: ok ? 'Owner self-capture marked completed (demo simulation)' : 'No owner self-capture yet — routed conservatively until capture is completed',

@@ -25,7 +25,10 @@ import { SPATIAL_TIER_LABEL } from '@/lib/engines/price';
 import { USAGE_LABEL } from '@/lib/engines/usage';
 import { buildNewPropertyCase, EMPTY_FORM, snapshotMode, type NewPropertyForm } from '@/lib/data/newPropertyCase';
 import { PinMap } from '@/components/workbench/maps';
-import AddressAutocomplete, { type PickedPlace } from '@/components/AddressAutocomplete';
+import AddressAutocomplete, { geocodeText, type PickedPlace } from '@/components/AddressAutocomplete';
+import DocumentIntake from '@/components/DocumentIntake';
+import type { OcrExtractResponse } from '@/app/api/ocr-extract/route';
+import { autofillFromFacts, type AutofillResult, type Provenance, type ProvKey } from '@/lib/data/docAutofill';
 import { RouteBadge, ScorePill } from '@/components/StatusBadges';
 
 interface GeoPlace {
@@ -71,7 +74,35 @@ export default function ValueNewPropertyPage() {
   const { upsertCase } = useCases();
   const startedAt = useRef(0);
   const [f, setF] = useState<NewPropertyForm>(EMPTY_FORM);
-  const set = <K extends keyof NewPropertyForm>(k: K, v: NewPropertyForm[K]) => setF((s) => ({ ...s, [k]: v }));
+  /* AI autofill provenance: which fields were filled from documents, and which the user has since edited. */
+  const [aiProv, setAiProv] = useState<AutofillResult['prov']>({});
+  const [edited, setEdited] = useState<Set<ProvKey>>(new Set());
+  const [ocrConflicts, setOcrConflicts] = useState<string[]>([]);
+  const [ocrNotes, setOcrNotes] = useState<string[]>([]);
+  /** User edit: updates the field and marks an AI-filled value as edited. */
+  const set = <K extends keyof NewPropertyForm>(k: K, v: NewPropertyForm[K]) => {
+    setF((s) => ({ ...s, [k]: v }));
+    if (aiProv[k] && !edited.has(k)) setEdited((e) => new Set(e).add(k));
+  };
+  const badge = (k: ProvKey) => (aiProv[k] ? { prov: aiProv[k]!, edited: edited.has(k) } : undefined);
+
+  const applyAutofill = async (r: OcrExtractResponse) => {
+    const res = autofillFromFacts(r.facts, r.docs, new Date());
+    setF((s) => ({ ...s, ...res.patch }));
+    setAiProv(res.prov);
+    setEdited(new Set());
+    setOcrConflicts(res.conflicts);
+    setOcrNotes(res.notes);
+    // Agent step: geocode the document address to place the pin (user can drag / re-search).
+    const q = [res.patch.address, res.patch.locality, res.patch.city, res.patch.state].filter(Boolean).join(', ');
+    if (q) {
+      const hit = await geocodeText(q);
+      if (hit) {
+        setF((s) => ({ ...s, lat: hit.lat, lng: hit.lng, city: s.city || hit.city || '', state: s.state || hit.state || '', locality: s.locality || hit.locality || '' }));
+        setAiProv((p) => ({ ...p, lat: { doc: 'Geocoded from document address', quote: q, derived: 'Verify the pin on the map' } }));
+      }
+    }
+  };
 
   const [snapshot, setSnapshot] = useState<LiveEvidenceSnapshot | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
@@ -193,6 +224,16 @@ export default function ValueNewPropertyPage() {
         </p>
       </div>
 
+      <DocumentIntake onExtracted={applyAutofill} conflicts={ocrConflicts} notes={ocrNotes} />
+
+      {Object.keys(aiProv).length > 0 && (
+        <p className="flex flex-wrap items-center gap-2 rounded-lg bg-sky-50 px-3 py-2 text-xs text-sky-800">
+          <AiPill ai={{ prov: { doc: 'documents', quote: '' }, edited: false }} />
+          {Object.keys(aiProv).length} field(s) filled from your documents — hover a badge to see the exact text it came from. Every field stays editable;
+          changed values are marked <span className="rounded bg-amber-100 px-1 font-semibold text-amber-800">edited</span>.
+        </p>
+      )}
+
       <div className="grid gap-5 xl:grid-cols-[1fr_1.15fr]">
         {/* ================= LEFT: property ================= */}
         <div className="space-y-5">
@@ -206,16 +247,16 @@ export default function ValueNewPropertyPage() {
               <PinMap center={subject ? [subject.lat, subject.lng] : [21.1458, 79.0882]} pin={subject ? [subject.lat, subject.lng] : null} onPick={pick} height={280} />
             </div>
             <div className="mt-2 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
-              <Field label="Latitude">
+              <Field label="Latitude" ai={badge('lat')}>
                 <input type="number" step="0.000001" value={f.lat ?? ''} onChange={(e) => set('lat', e.target.value === '' ? null : Number(e.target.value))} className="input" />
               </Field>
               <Field label="Longitude">
                 <input type="number" step="0.000001" value={f.lng ?? ''} onChange={(e) => set('lng', e.target.value === '' ? null : Number(e.target.value))} className="input" />
               </Field>
-              <Field label="Locality">
+              <Field label="Locality" ai={badge('locality')}>
                 <input value={f.locality} onChange={(e) => set('locality', e.target.value)} className="input" />
               </Field>
-              <Field label="City">
+              <Field label="City" ai={badge('city')}>
                 <input value={f.city} onChange={(e) => set('city', e.target.value)} className="input" />
               </Field>
             </div>
@@ -223,22 +264,28 @@ export default function ValueNewPropertyPage() {
 
           <Card title="2 · Property details (from deed / plan / owner)" icon={<Database className="h-4 w-4 text-maroon" />}>
             <div className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-3">
-              <Field label="Title" wide>
+              <Field label="Title" wide ai={badge('title')}>
                 <input value={f.title} onChange={(e) => set('title', e.target.value)} className="input" />
               </Field>
-              <Field label="Usage">
+              <Field label="Owner / applicant" ai={badge('applicantName')}>
+                <input value={f.applicantName} onChange={(e) => set('applicantName', e.target.value)} className="input" />
+              </Field>
+              <Field label="Address (as per documents)" wide ai={badge('address')}>
+                <input value={f.address} onChange={(e) => set('address', e.target.value)} className="input" />
+              </Field>
+              <Field label="Usage" ai={badge('usage')}>
                 <select value={f.usage} onChange={(e) => set('usage', e.target.value as UsageClass)} className="input">
                   {USAGES.map((u) => (
                     <option key={u} value={u}>{USAGE_LABEL[u]}</option>
                   ))}
                 </select>
               </Field>
-              <NumField label="Plot area — deed (sqft)" value={f.deedPlotAreaSqft} onChange={(v) => set('deedPlotAreaSqft', v ?? 0)} />
-              <NumField label="Plot area — land record (sqft, optional)" value={f.recordPlotAreaSqft} onChange={(v) => set('recordPlotAreaSqft', v)} />
+              <NumField label="Plot area — deed (sqft)" ai={badge('deedPlotAreaSqft')} value={f.deedPlotAreaSqft} onChange={(v) => set('deedPlotAreaSqft', v ?? 0)} />
+              <NumField label="Plot area — land record (sqft, optional)" ai={badge('recordPlotAreaSqft')} value={f.recordPlotAreaSqft} onChange={(v) => set('recordPlotAreaSqft', v)} />
               <NumField label="Road-widening loss (sqft)" value={f.roadWideningLossSqft} onChange={(v) => set('roadWideningLossSqft', v ?? 0)} />
-              <NumField label="Approach road (ft)" value={f.roadWidthFt} onChange={(v) => set('roadWidthFt', v ?? 0)} />
-              <NumField label="Age (years)" value={f.ageYears} onChange={(v) => set('ageYears', v ?? 0)} />
-              <NumField label="Residual life (years)" value={f.residualLifeYears} onChange={(v) => set('residualLifeYears', v ?? 0)} />
+              <NumField label="Approach road (ft)" ai={badge('roadWidthFt')} value={f.roadWidthFt} onChange={(v) => set('roadWidthFt', v ?? 0)} />
+              <NumField label="Age (years)" ai={badge('ageYears')} value={f.ageYears} onChange={(v) => set('ageYears', v ?? 0)} />
+              <NumField label="Residual life (years)" ai={badge('residualLifeYears')} value={f.residualLifeYears} onChange={(v) => set('residualLifeYears', v ?? 0)} />
               <NumField label="Construction rate, as-valued (Rs./sqft)" value={f.constructionRatePerSqft} onChange={(v) => set('constructionRatePerSqft', v ?? 0)} />
               <NumField label="Amenities (Rs.)" value={f.amenitiesValueInr} onChange={(v) => set('amenitiesValueInr', v ?? 0)} />
               <Field label="FSV ratio">
@@ -249,10 +296,25 @@ export default function ValueNewPropertyPage() {
               </Field>
               <NumField label="Requested loan (Rs., optional)" value={f.requestedLoanInr} onChange={(v) => set('requestedLoanInr', v)} />
               <NumField label="Monthly rent (Rs., if leased)" value={f.monthlyRentInr} onChange={(v) => set('monthlyRentInr', v)} />
+              <Field label="Survey / khasra nos. — sale deed" ai={badge('surveyDeed')}>
+                <input value={f.surveyDeed} onChange={(e) => set('surveyDeed', e.target.value)} placeholder="e.g. 112/2" className="input" />
+              </Field>
+              <Field label="Survey / khasra nos. — land record" ai={badge('surveyRecord')}>
+                <input value={f.surveyRecord} onChange={(e) => set('surveyRecord', e.target.value)} placeholder="e.g. 112/2" className="input" />
+              </Field>
             </div>
+            {f.deedBoundaries && (
+              <p className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-slate-600">
+                <span className="font-semibold">Boundaries (deed):</span> E: {f.deedBoundaries.East || '—'} · W: {f.deedBoundaries.West || '—'} · N: {f.deedBoundaries.North || '—'} · S: {f.deedBoundaries.South || '—'}
+                {badge('deedBoundaries') && <AiPill ai={badge('deedBoundaries')!} />}
+              </p>
+            )}
 
             <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-xs">
-              <Check label="Sanctioned plan available" checked={f.hasSanctionedPlan} onChange={(v) => set('hasSanctionedPlan', v)} />
+              <span className="flex items-center gap-1.5">
+                <Check label="Sanctioned plan available" checked={f.hasSanctionedPlan} onChange={(v) => set('hasSanctionedPlan', v)} />
+                {badge('hasSanctionedPlan') && <AiPill ai={badge('hasSanctionedPlan')!} />}
+              </span>
               {!f.hasSanctionedPlan && (
                 <label className="flex items-center gap-1.5">
                   No-plan policy:
@@ -266,7 +328,9 @@ export default function ValueNewPropertyPage() {
             </div>
 
             <div className="mt-3">
-              <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Floors (sqft)</div>
+              <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Floors (sqft) {badge('floors') && <AiPill ai={badge('floors')!} />}
+              </div>
               <table className="w-full text-xs">
                 <thead>
                   <tr className="text-left text-slate-500">
@@ -468,18 +532,37 @@ function Card({ title, icon, children }: { title: string; icon: ReactNode; child
   );
 }
 
-function Field({ label, children, wide }: { label: string; children: ReactNode; wide?: boolean }) {
+type AiBadge = { prov: Provenance; edited: boolean };
+
+/** Source badge for AI-filled fields (hover = verbatim quote + any deterministic conversion). */
+function AiPill({ ai }: { ai: AiBadge }) {
+  const tip = [ai.prov.quote && `“${ai.prov.quote}”`, ai.prov.derived, `Source: ${ai.prov.doc}`].filter(Boolean).join('\n');
+  return ai.edited ? (
+    <span title={`Edited by you. Originally from ${ai.prov.doc}\n${tip}`} className="rounded bg-amber-100 px-1 text-[10px] font-semibold normal-case tracking-normal text-amber-800">
+      edited
+    </span>
+  ) : (
+    <span title={tip} className="cursor-help rounded bg-sky-100 px-1 text-[10px] font-semibold normal-case tracking-normal text-sky-800">
+      AI · {ai.prov.doc.split(' (')[0]}
+    </span>
+  );
+}
+
+function Field({ label, children, wide, ai }: { label: string; children: ReactNode; wide?: boolean; ai?: AiBadge }) {
   return (
     <label className={`block ${wide ? 'col-span-2' : ''}`}>
-      <span className="mb-0.5 block font-medium text-slate-600">{label}</span>
+      <span className="mb-0.5 flex items-center gap-1.5 font-medium text-slate-600">
+        {label}
+        {ai && <AiPill ai={ai} />}
+      </span>
       {children}
     </label>
   );
 }
 
-function NumField({ label, value, onChange }: { label: string; value: number | null; onChange: (v: number | null) => void }) {
+function NumField({ label, value, onChange, ai }: { label: string; value: number | null; onChange: (v: number | null) => void; ai?: AiBadge }) {
   return (
-    <Field label={label}>
+    <Field label={label} ai={ai}>
       <input
         type="number"
         min={0}

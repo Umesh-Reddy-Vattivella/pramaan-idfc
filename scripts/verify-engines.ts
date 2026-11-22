@@ -28,6 +28,9 @@ import {
   tierFromDistanceKm,
 } from '../lib/engines/marketEvidence';
 import { buildNewPropertyCase, EMPTY_FORM } from '../lib/data/newPropertyCase';
+import { ageFromYear, classifyDocType, detectLanguage, parseRoadWidthFt, parseYear, patternFacts, usageFromText } from '../lib/engines/docFacts';
+import { normaliseDigits } from '../lib/engines/marketEvidence';
+import { autofillFromFacts } from '../lib/data/docAutofill';
 import type { MarketDataPoint } from '../lib/types';
 
 let pass = 0;
@@ -188,6 +191,78 @@ check('Area without unit → null', parseAreaSqft('5000'), null);
 check('Quote present in source', quoteInSource('₹15 Lac', 'Plots ; ₹15 Lac · 5000 sqft · A'), true);
 check('Invented quote rejected', quoteInSource('₹19 Lac', 'Plots ; ₹15 Lac · 5000 sqft · A'), false);
 check('Regex fallback finds rate', extractRatesFromText('Find this plot at ₹12 Lac (₹1,200/sqft). It spans').map((x) => x.rate).join(','), '1200');
+
+console.log('\nDocument OCR autofill (deterministic parts)');
+{
+  const now = new Date(2026, 10, 22);
+  check('Language: Devanagari → Hindi / Marathi', detectLanguage('गाव : अजनी तालुका : नागपूर सर्वे क्रमांक 112/2'), 'Hindi / Marathi (Devanagari)');
+  check('Language: Tamil', detectLanguage('பட்டா எண் 305278 புல எண் 173A/1F'), 'Tamil');
+  check('Language: English', detectLanguage('Sale deed executed at Nagpur'), 'English');
+  check('Doc type: sale deed', classifyDocType('This Sale Deed is executed between the Vendor and the Purchaser'), 'SALE_DEED');
+  check('Doc type: 7/12 extract', classifyDocType('7/12 EXTRACT - LAND RECORD Village Ajni'), 'LAND_RECORD');
+  check('Doc type: Marathi 7/12', classifyDocType('गाव नमुना सातबारा उतारा'), 'LAND_RECORD');
+  check('Doc type: sanctioned plan', classifyDocType('Building Permission / Sanctioned Plan No. NMC/BP/2015/0417'), 'SANCTIONED_PLAN');
+  check('Age from 2016 (in 2026)', ageFromYear(2016, now), 10);
+  check('Usage: LT-I Residential tariff', usageFromText('LT-I Residential'), 'RESIDENTIAL');
+  check('Usage: commercial tax class', usageFromText('Tax class: Commercial'), 'COMMERCIAL');
+  check('Road width "9 m wide road" → 29.53 ft', parseRoadWidthFt('9 m wide road'), 29.53);
+  check('Hectare area → sqft', parseAreaSqft('0.0167 Hectare'), 1797.5713);
+  check('"167.22 sq. m. (1800 sq. ft.)" → 1800 (own-unit pairing)', parseAreaSqft('167.22 sq. m. (1800 sq. ft.)'), 1800);
+  check('"0.0167 Hectare (167.0 sq. m)" → first pair', parseAreaSqft('0.0167 Hectare (167.0 sq. m)'), 1797.5713);
+  check('Devanagari digits "११२/२" → "112/2"', normaliseDigits('११२/२'), '112/2');
+  check('Tamil digits "௧௭௩" → "173"', normaliseDigits('௧௭௩'), '173');
+  check('Marathi "०.०१६७ हे.आर" → hectare → sqft', parseAreaSqft('०.०१६७ हे.आर'), 1797.5713);
+  check('Marathi "१६७ चौ.मी" → sqft', parseAreaSqft('१६७ चौ.मी'), 1797.5713);
+  check('Hindi "1800 वर्ग फुट" → 1800', parseAreaSqft('1800 वर्ग फुट'), 1800);
+  check('Tamil "1800 சதுர அடி" → 1800', parseAreaSqft('1800 சதுர அடி'), 1800);
+  check('Marathi "२ गुंठे" → 2178 sqft', parseAreaSqft('२ गुंठे'), 2178);
+  check('"4.50 Ares" → 4843.755 sqft', parseAreaSqft('4.50 Ares'), 4843.755);
+  check('Year in Devanagari "२०१६"', parseYear('बांधकाम वर्ष २०१६'), 2016);
+  truthy('Quote check tolerant of digit script', quoteInSource('112/2', 'भूमापन क्रमांक : ११२/२'));
+  const mixed = autofillFromFacts(
+    [
+      { field: 'SURVEY_NUMBER', value: 'Khasra No. 112/2'.replace('Khasra No. ', ''), doc: 0, origin: 'AI' },
+      { field: 'SURVEY_NUMBER', value: '११२/२', doc: 1, origin: 'AI' },
+    ],
+    [
+      { name: 'deed.pdf', docType: 'SALE_DEED', language: 'English', method: 'text' },
+      { name: '712.jpg', docType: 'LAND_RECORD', language: 'Hindi / Marathi (Devanagari)', method: 'vision' },
+    ],
+    now,
+  );
+  check('Survey 112/2 (deed) vs ११२/२ (7/12) → no false conflict', mixed.conflicts.length, 0);
+  check('Survey stored with ASCII digits', mixed.patch.surveyRecord, '112/2');
+  const deedText = 'SALE DEED ... Khasra No. 112/2, Mouza Ajni. Area of plot: 167.22 sq. m. (1800 sq. ft.) constructed in the year 2016.';
+  const pf = patternFacts(deedText, 0);
+  check('Pattern: survey number', pf.find((x) => x.field === 'SURVEY_NUMBER')?.value, '112/2');
+  check('Pattern: plot area', pf.find((x) => x.field === 'PLOT_AREA')?.value, '167.22 sq. m');
+  check('Pattern: construction year', pf.find((x) => x.field === 'CONSTRUCTION_YEAR')?.value, '2016');
+  const docs = [
+    { name: 'deed.pdf', docType: 'SALE_DEED' as const, language: 'English', method: 'PDF text layer' },
+    { name: '712.jpg', docType: 'LAND_RECORD' as const, language: 'English', method: 'Vision OCR' },
+  ];
+  const af = autofillFromFacts(
+    [
+      { field: 'PLOT_AREA', value: '1800 sq. ft.', doc: 0, origin: 'AI' },
+      { field: 'PLOT_AREA', value: '167.0 sq. m', doc: 1, origin: 'AI' },
+      { field: 'CONSTRUCTION_YEAR', value: '2016', doc: 0, origin: 'AI' },
+      { field: 'SURVEY_NUMBER', value: '112/2', doc: 0, origin: 'AI' },
+      { field: 'SURVEY_NUMBER', value: '112/3', doc: 1, origin: 'AI' },
+      { field: 'USAGE', value: 'LT-I Residential', doc: 0, origin: 'AI' },
+      { field: 'FLOOR_AREA_SANCTIONED', value: '1,050 sq ft', floorName: 'Ground floor', doc: 0, origin: 'AI' },
+    ],
+    docs,
+    now,
+  );
+  check('Autofill: deed area', af.patch.deedPlotAreaSqft, 1800);
+  check('Autofill: record area 167.0 sq m → sqft', af.patch.recordPlotAreaSqft, 1797.57);
+  check('Autofill: age 10, residual 50', `${af.patch.ageYears}/${af.patch.residualLifeYears}`, '10/50');
+  check('Autofill: usage', af.patch.usage, 'RESIDENTIAL');
+  check('Autofill: survey deed vs record', `${af.patch.surveyDeed}|${af.patch.surveyRecord}`, '112/2|112/3');
+  truthy('Autofill: survey mismatch flagged', af.conflicts.some((c) => c.includes('Survey numbers differ')));
+  check('Autofill: area within 1% → no area conflict', af.conflicts.some((c) => c.includes('Plot area differs')), false);
+  check('Autofill: provenance keeps verbatim quote', af.prov.recordPlotAreaSqft?.quote, '167.0 sq. m');
+}
 
 console.log('\n§7.1-6  PDF export builds for every case');
 const outDir = process.argv[2];
