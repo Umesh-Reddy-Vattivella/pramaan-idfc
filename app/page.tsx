@@ -10,6 +10,7 @@ import {
   Gauge,
   IndianRupee,
   Plus,
+  Globe,
   RotateCcw,
   Upload,
   Zap,
@@ -107,6 +108,12 @@ export default function PortfolioPage() {
           >
             <Plus className="h-4 w-4" /> Start Owner Self-Capture
           </Link>
+          <Link
+            href="/value"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-maroon bg-white px-3.5 py-2 text-sm font-semibold text-maroon hover:bg-maroon/5"
+          >
+            <Globe className="h-4 w-4" /> Value a New Property (Live Data)
+          </Link>
           <button
             type="button"
             onClick={() => setUploadOpen(true)}
@@ -198,6 +205,8 @@ export default function PortfolioPage() {
                     <div className="flex items-center gap-2">
                       {c.benchmarkLabel ? (
                         <span className="rounded bg-maroon/10 px-1.5 py-0.5 text-[10px] font-bold text-maroon">IDFC {c.benchmarkLabel}</span>
+                      ) : c.origin === 'LIVE_MARKET' ? (
+                        <span className="rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold text-sky-700">LIVE MARKET</span>
                       ) : c.origin === 'SEED' ? (
                         <span className="rounded bg-instant-bg px-1.5 py-0.5 text-[10px] font-bold text-instant">SHOWCASE</span>
                       ) : (

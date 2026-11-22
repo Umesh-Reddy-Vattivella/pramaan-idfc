@@ -29,6 +29,7 @@ export interface ComparablePin {
   rawRate: number;
   adjustedRate: number;
   note: string;
+  url?: string; // source page for live-search / manual comparables
 }
 
 export interface FloorAreaRow {
@@ -143,7 +144,39 @@ export interface PropertyCase {
   requestedLoanInr?: number;                // example loan request (R3: Rs. 2.0 Cr)
   details?: { label: string; value: string }[]; // descriptive report fields for display
   roadSide?: 'East' | 'West' | 'North' | 'South'; // approach-road side (map widening overlay)
+  liveEvidence?: LiveEvidenceSnapshot; // live market evidence snapshot (replays offline)
   cvDetections?: { label: string; confidencePct: number; frame: string; usage: UsageClass }[]; // CV photo annotations
 }
 
-export type CaseOrigin = 'SEED' | 'SELF_CAPTURE' | 'LIVE_UPLOAD';
+export type CaseOrigin = 'SEED' | 'SELF_CAPTURE' | 'LIVE_UPLOAD' | 'LIVE_MARKET';
+
+/* ---------------- Live market evidence (Value a New Property) ---------------- */
+export type MarketPointKind = 'SALE' | 'LISTING' | 'AUCTION' | 'RERA' | 'GUIDELINE';
+
+export interface MarketDataPoint {
+  id: string;
+  kind: MarketPointKind;
+  priceInr?: number;
+  areaSqft?: number;
+  statedRatePerSqft?: number;
+  propertyType?: string;
+  locality?: string;
+  date?: string; // YYYY-MM or YYYY-MM-DD as printed
+  url?: string;
+  title?: string;
+  origin: 'LIVE_SEARCH' | 'MANUAL';
+  lat?: number;
+  lng?: number;
+  distanceKm?: number;
+  included: boolean;
+}
+
+export interface LiveEvidenceSnapshot {
+  fetchedAt: string;
+  mode: 'LIVE_SEARCH' | 'MANUAL' | 'MIXED';
+  model?: string;
+  queries: string[];
+  citations: { title: string; uri: string }[];
+  points: MarketDataPoint[];
+  rejected: { title?: string; url?: string; reason: string }[];
+}

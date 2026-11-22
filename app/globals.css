@@ -63,6 +63,9 @@ body {
   .badge-critical {
     @apply bg-critical-bg text-critical;
   }
+  .input {
+    @apply w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs text-ink tabular-nums focus:border-maroon focus:outline-none;
+  }
 }
 
 /* Offline fallback styling for map tiles (DoD: only tiles need fallback when Wi-Fi drops) */

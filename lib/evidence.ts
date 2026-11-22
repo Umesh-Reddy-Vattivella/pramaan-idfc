@@ -3,6 +3,7 @@
    Formats values already computed by lib/engines — performs no valuation math.
    ------------------------------------------------------------------ */
 import type { PriceSourceInput, PropertyCase } from '@/lib/types';
+import { KIND_TO_SOURCE } from '@/lib/engines/marketEvidence';
 import type { EvidencePack } from '@/lib/engines/evaluateCase';
 import { formatIndianNumber, formatInr, formatPctTrunc } from '@/lib/engines/valuation';
 import { SPATIAL_TIER_LABEL } from '@/lib/engines/price';
@@ -255,11 +256,25 @@ export function buildEvidence(c: PropertyCase, e: EvidencePack): Record<string, 
 
   const byKey: Record<string, Evidence> = {};
   for (const ev of out) byKey[ev.key] = ev;
-  for (const s of c.priceSources) byKey[`src:${s.id}`] = sourceEvidence(s);
+  for (const s of c.priceSources) byKey[`src:${s.id}`] = sourceEvidence(s, liveUrls(c, s.id));
+  if (c.liveEvidence && byKey.consensus) {
+    const le = c.liveEvidence;
+    byKey.consensus.sources = [
+      `Live evidence snapshot (${le.mode.replace('_', ' ').toLowerCase()}) fetched ${new Date(le.fetchedAt).toLocaleString('en-IN')}${le.model ? ` via ${le.model} + Google Search grounding` : ''}`,
+      ...(le.queries.length ? [`Searches: ${le.queries.join(' | ')}`] : []),
+      ...le.citations.slice(0, 8).map((x) => x.uri),
+    ];
+  }
   return byKey;
 }
 
-function sourceEvidence(s: PriceSourceInput): Evidence {
+/** Source URLs of included live / manual data points feeding a given price source. */
+function liveUrls(c: PropertyCase, id: PriceSourceInput['id']): string[] {
+  if (!c.liveEvidence) return [];
+  return c.liveEvidence.points.filter((p) => p.included && p.url && KIND_TO_SOURCE[p.kind] === id).map((p) => p.url!).slice(0, 10);
+}
+
+function sourceEvidence(s: PriceSourceInput, urls: string[] = []): Evidence {
   return {
     key: `src:${s.id}`,
     title: `${s.label} — corrected rate`,
@@ -272,7 +287,7 @@ function sourceEvidence(s: PriceSourceInput): Evidence {
       { label: 'Median age', value: `${s.medianAgeMonths} months` },
       { label: 'Weight', value: pct(s.weight, 0) },
     ],
-    sources: [s.label],
+    sources: [s.label, ...urls],
     engine: 'Engine 2 PRICE §3.3 bias correction',
   };
 }

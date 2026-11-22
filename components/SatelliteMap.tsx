@@ -9,44 +9,12 @@ import { CircleMarker, LayersControl, MapContainer, Polygon, Polyline, TileLayer
 import type { LatLngExpression } from 'leaflet';
 import type { ComparablePin, PropertyCase } from '@/lib/types';
 import { SOURCE_COLOR, SOURCE_SHORT } from '@/lib/sourceMeta';
+import { offsetLatLng as offset, parcelGeometry } from '@/lib/mapGeometry';
 
 const ESRI_SAT = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
 const ESRI_ATTR = 'Tiles &copy; Esri — Source: Esri, Maxar, Earthstar Geographics';
 const OSM = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 const OSM_ATTR = '&copy; OpenStreetMap contributors';
-
-const M_PER_DEG_LAT = 111320;
-const FT = 0.3048;
-
-function offset(lat: number, lng: number, northM: number, eastM: number): [number, number] {
-  return [lat + northM / M_PER_DEG_LAT, lng + eastM / (M_PER_DEG_LAT * Math.cos((lat * Math.PI) / 180))];
-}
-
-/**
- * Illustrative square parcel footprint sized to the deed plot area, with the road-widening strip
- * on the approach-road side. Strip depth = (proposed − current road width) / 2 (R1: (78.72 − 47)/2 = 15.86 ft).
- */
-function parcelGeometry(c: PropertyCase) {
-  const sideM = Math.sqrt(Math.max(c.deedPlotAreaSqft, 1)) * FT;
-  const h = sideM / 2;
-  const corners = (n0: number, n1: number, e0: number, e1: number): LatLngExpression[] => [
-    offset(c.lat, c.lng, n0, e0),
-    offset(c.lat, c.lng, n0, e1),
-    offset(c.lat, c.lng, n1, e1),
-    offset(c.lat, c.lng, n1, e0),
-  ];
-  const parcel = corners(-h, h, -h, h);
-  let widening: LatLngExpression[] | null = null;
-  if (c.roadWidthProposedFt && c.roadWidthProposedFt > c.roadWidthCurrentFt && c.roadSide) {
-    const d = ((c.roadWidthProposedFt - c.roadWidthCurrentFt) / 2) * FT;
-    widening =
-      c.roadSide === 'North' ? corners(h - d, h, -h, h)
-      : c.roadSide === 'South' ? corners(-h, -h + d, -h, h)
-      : c.roadSide === 'East' ? corners(-h, h, h - d, h)
-      : corners(-h, h, -h, -h + d);
-  }
-  return { parcel, widening };
-}
 
 export interface SatelliteMapProps {
   caseData: PropertyCase;

@@ -101,7 +101,15 @@ function Drawer({ opened, onClose }: { opened: Opened; onClose: () => void }) {
             </h3>
             <ul className="space-y-1.5">
               {ev.sources.map((s) => (
-                <li key={s} className="rounded-md bg-canvas px-3 py-1.5 text-xs text-slate-700">{s}</li>
+                <li key={s} className="break-all rounded-md bg-canvas px-3 py-1.5 text-xs text-slate-700">
+                  {s.startsWith('http://') || s.startsWith('https://') ? (
+                    <a href={s} target="_blank" rel="noopener noreferrer" className="text-maroon underline">
+                      {s}
+                    </a>
+                  ) : (
+                    s
+                  )}
+                </li>
               ))}
             </ul>
           </section>

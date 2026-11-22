@@ -7,6 +7,7 @@
    ------------------------------------------------------------------ */
 import { NextResponse } from 'next/server';
 import { evaluateCase } from '@/lib/engines/evaluateCase';
+import { callGemini, extractJson } from '@/lib/live/gemini';
 import {
   EXTRACTION_PROMPT,
   EXTRACTION_SCHEMA,
@@ -20,38 +21,23 @@ import {
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+export const maxDuration = 60;
 
 const MAX_FILES = 8;
 const MAX_TOTAL_BYTES = 18 * 1024 * 1024; // keep inline payload under Gemini's request limit
 const ALLOWED = new Set(['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']);
-const GEMINI_TIMEOUT_MS = 45000;
 
-async function extractWithGemini(files: File[], apiKey: string, model: string): Promise<ExtractedReport> {
+async function extractWithGemini(files: File[], apiKey: string): Promise<{ extracted: ExtractedReport; model: string }> {
   const parts: Record<string, unknown>[] = [{ text: EXTRACTION_PROMPT }];
   for (const f of files) {
     const data = Buffer.from(await f.arrayBuffer()).toString('base64');
     parts.push({ inline_data: { mime_type: f.type, data } });
   }
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), GEMINI_TIMEOUT_MS);
-  try {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts }],
-        generationConfig: { temperature: 0, responseMimeType: 'application/json', responseSchema: EXTRACTION_SCHEMA },
-      }),
-      signal: ctrl.signal,
-    });
-    if (!res.ok) throw new Error(`Gemini HTTP ${res.status}`);
-    const json = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
-    const text = json.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('') ?? '';
-    if (!text) throw new Error('Gemini returned no content');
-    return sanitizeExtraction(JSON.parse(text));
-  } finally {
-    clearTimeout(timer);
-  }
+  const r = await callGemini(apiKey, {
+    contents: [{ role: 'user', parts }],
+    generationConfig: { temperature: 0, responseMimeType: 'application/json', responseSchema: EXTRACTION_SCHEMA },
+  });
+  return { extracted: sanitizeExtraction(extractJson(r.text)), model: r.model };
 }
 
 export async function POST(req: Request) {
@@ -73,7 +59,7 @@ export async function POST(req: Request) {
 
   const fileNames = files.map((f) => f.name);
   const apiKey = process.env.GEMINI_API_KEY;
-  const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+  let model: string | undefined;
 
   let mode: ExtractionMode = 'SIMULATED';
   let warning: string | undefined;
@@ -81,7 +67,9 @@ export async function POST(req: Request) {
 
   if (apiKey) {
     try {
-      extracted = await extractWithGemini(files, apiKey, model);
+      const r = await extractWithGemini(files, apiKey);
+      extracted = r.extracted;
+      model = r.model;
       mode = 'LIVE_AI';
     } catch (err) {
       warning = `Live AI extraction unavailable (${err instanceof Error ? err.message : 'error'}) — fell back to Simulated Extraction Mode.`;

@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
   Smartphone,
+  Globe,
   ClipboardCheck,
   FileText,
   ShieldCheck,
@@ -29,6 +30,7 @@ export default function TopNav() {
   const items: NavItem[] = [
     { label: "Portfolio Command Center", href: "/", icon: LayoutDashboard, active: pathname === "/" },
     { label: "Owner Self-Capture", href: "/capture", icon: Smartphone, active: pathname.startsWith("/capture") },
+    { label: "Value New Property", href: "/value", icon: Globe, active: pathname.startsWith("/value") },
     {
       label: "Underwriter Workbench",
       href: caseId ? `/cases/${encodeURIComponent(caseId)}` : null,

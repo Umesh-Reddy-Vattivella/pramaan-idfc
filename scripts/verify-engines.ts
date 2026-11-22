@@ -14,6 +14,9 @@ import { baselineStressInputs, runStressTest } from '../lib/engines/stressTest';
 import { buildCaptureCase, CAPTURE_SITE } from '../lib/data/captureTemplate';
 import { extractionToCase, sanitizeExtraction, simulatedExtraction } from '../lib/live/extraction';
 import { buildIdfcPdf } from '../lib/pdf/generateIdfcPdf';
+import { aggregateLiveEvidence, correctionFactor, monthsSince, outlierFlags, pointRate, tierFromDistanceKm } from '../lib/engines/marketEvidence';
+import { buildNewPropertyCase, EMPTY_FORM } from '../lib/data/newPropertyCase';
+import type { MarketDataPoint } from '../lib/types';
 
 let pass = 0;
 let fail = 0;
@@ -110,6 +113,53 @@ truthy('Simulated extraction evaluates (MV > 0)', simEv.valuation.mvFinal > 0);
 check('Simulated words consistent with figure (QC-1)', qc(simEv, 'QC-1').status, 'PASS');
 check('Sanitiser masks 12-digit IDs', sanitizeExtraction({ applicantName: 'Owner 1234 5678 9012' }).applicantName, 'Owner [masked]');
 check('Sanitiser normalises FSV 80 → 0.8', sanitizeExtraction({ fsvRatio: 80 }).fsvRatio, 0.8);
+
+console.log('\nLive market evidence engine (Value a New Property)');
+{
+  const now = new Date(2026, 10, 22);
+  const subj = { lat: 21.14, lng: 79.06 };
+  const near = { lat: 21.143, lng: 79.062 }; // ≈ 0.4 km away
+  const pt = (id: string, kind: MarketDataPoint['kind'], extra: Partial<MarketDataPoint>): MarketDataPoint => ({ id, kind, origin: 'LIVE_SEARCH', included: true, ...near, ...extra });
+  check('pointRate = price ÷ area', pointRate(pt('a', 'LISTING', { priceInr: 9000000, areaSqft: 1200 })), 7500);
+  check('pointRate prefers stated rate', pointRate(pt('a', 'LISTING', { priceInr: 9000000, areaSqft: 1200, statedRatePerSqft: 7000 })), 7000);
+  check('Listing correction (1 − 0.14)', correctionFactor('LISTING'), 0.86);
+  check('Auction correction (÷ 0.80)', correctionFactor('AUCTION'), 1.25);
+  check('monthsSince 2026-05 → 6', monthsSince('2026-05', now), 6);
+  check('Tukey outlier flagged', outlierFlags([8000, 8200, 8400, 30000]).join(','), 'false,false,false,true');
+  check('Tier ≤1 km', tierFromDistanceKm(0.8), 'MICRO_1KM');
+  check('Tier ≤3 km', tierFromDistanceKm(2.5), 'WARD_VILLAGE');
+  check('Tier ≤10 km', tierFromDistanceKm(7), 'SRO_ZONE');
+  check('Tier unknown → District', tierFromDistanceKm(null), 'DISTRICT');
+  const agg = aggregateLiveEvidence(
+    [
+      pt('l1', 'LISTING', { statedRatePerSqft: 8000, date: '2026-09' }),
+      pt('l2', 'LISTING', { statedRatePerSqft: 8200, date: '2026-10' }),
+      pt('l3', 'LISTING', { statedRatePerSqft: 8400, date: '2026-08' }),
+      pt('l4', 'LISTING', { statedRatePerSqft: 30000, date: '2026-10' }),
+      pt('a1', 'AUCTION', { priceInr: 9000000, areaSqft: 1500, date: '2026-03' }),
+      pt('g1', 'GUIDELINE', { statedRatePerSqft: 2800 }),
+      pt('x1', 'LISTING', { statedRatePerSqft: 9999, included: false }),
+    ],
+    subj,
+    now,
+  );
+  const lst = agg.priceSources.find((s) => s.id === 'LISTINGS')!;
+  const auc = agg.priceSources.find((s) => s.id === 'AUCTIONS')!;
+  check('Outlier excluded from listings', agg.outliers.join(','), 'l4');
+  check('Listings raw = median 8,200', lst.rawRatePerSqft, 8200);
+  check('Listings corrected = 8,200 × 0.86', lst.correctedRatePerSqft, 7052);
+  check('Auction corrected = 6,000 ÷ 0.80', auc.correctedRatePerSqft, 7500);
+  check('Guideline → circle rate (weight 0)', agg.circleRatePerSqft, 2800);
+  check('Weights sum to 1', Math.round(agg.priceSources.reduce((s, x) => s + x.weight, 0) * 1000) / 1000, 1);
+  check('Spatial tier from distance', agg.spatialTier, 'MICRO_1KM');
+  check('Comparable pins (excl. guideline, outlier, unticked)', agg.comparables.length, 4);
+  const form = { ...EMPTY_FORM, lat: subj.lat, lng: subj.lng, city: 'Nagpur', deedPlotAreaSqft: 1500, floors: [{ floorName: 'GF', sanctionedSqft: 1000, actualSqft: 1000 }], constructionRatePerSqft: 1800 };
+  const noCap = evaluateCase(buildNewPropertyCase('live-market-test01', form, agg, null, 5));
+  truthy('New-property case values (MV > 0)', noCap.valuation.mvFinal > 0);
+  check('No owner capture → Trust not passed', noCap.trust.allPassed, false);
+  check('No owner capture → not an omission-fraud block', noCap.trust.omissionFraudBlock, false);
+  check('Capture completed → Trust passes', evaluateCase(buildNewPropertyCase('live-market-test02', { ...form, captureCompleted: true }, agg, null, 5)).trust.allPassed, true);
+}
 
 console.log('\n§7.1-6  PDF export builds for every case');
 const outDir = process.argv[2];

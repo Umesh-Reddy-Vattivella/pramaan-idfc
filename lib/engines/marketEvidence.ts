@@ -1,0 +1,231 @@
+/* ------------------------------------------------------------------
+   Live Market Evidence aggregation — pure, deterministic (PRD §3.3 applied
+   to live / manual data points). The search model only EXTRACTS printed
+   prices, areas and rates; every rate, correction, weight and tier is
+   computed here.
+   ------------------------------------------------------------------ */
+import type { ComparablePin, MarketDataPoint, MarketPointKind, PriceSourceInput, SpatialTier } from '@/lib/types';
+import { inverseVarianceWeights, median, stdDev } from './price';
+import { haversineMeters } from './trust';
+
+/**
+ * Default bias corrections for UNCALIBRATED live data (no locality k_reg / d calibration yet):
+ *  - LISTING : r × (1 − d), d = 0.14 (PRD §3.3 illustrative asking-to-closing discount)
+ *  - AUCTION : r / f, f = 0.80 (PRD §3.3 forced-sale ratio)
+ *  - SALE    : r × k_reg, k_reg = 1.00 (reported transaction values — no under-declaration uplift without calibration)
+ *  - RERA    : r − net offer (0 when no offer is stated)
+ *  - GUIDELINE: circle-rate floor check only (weight 0)
+ */
+export const LIVE_DEFAULTS = { listingDiscount: 0.14, auctionForcedSaleRatio: 0.8, kReg: 1.0 };
+
+export const KIND_TO_SOURCE: Record<MarketPointKind, PriceSourceInput['id']> = {
+  SALE: 'REGD_DEEDS',
+  LISTING: 'LISTINGS',
+  AUCTION: 'AUCTIONS',
+  RERA: 'RERA_BUILDER',
+  GUIDELINE: 'CIRCLE_RATE',
+};
+
+const SOURCE_LABEL: Record<MarketPointKind, string> = {
+  SALE: 'Reported sale transactions (web)',
+  LISTING: 'Online portal listings (live search)',
+  AUCTION: 'Bank auction notices (live search)',
+  RERA: 'RERA / builder price lists (live search)',
+  GUIDELINE: 'Circle / guideline rate (live search)',
+};
+
+/** Correction factor applied multiplicatively to the raw rate. */
+export function correctionFactor(kind: MarketPointKind): number {
+  if (kind === 'LISTING') return 1 - LIVE_DEFAULTS.listingDiscount;
+  if (kind === 'AUCTION') return 1 / LIVE_DEFAULTS.auctionForcedSaleRatio;
+  if (kind === 'SALE') return LIVE_DEFAULTS.kReg;
+  return 1;
+}
+
+function correctionLabel(kind: MarketPointKind): string {
+  if (kind === 'LISTING') return `median(r_ask) × (1 − d), d = ${LIVE_DEFAULTS.listingDiscount * 100}% (default, uncalibrated)`;
+  if (kind === 'AUCTION') return `r_auction / f, f = ${LIVE_DEFAULTS.auctionForcedSaleRatio}`;
+  if (kind === 'SALE') return `median(r_sale) × k_reg, k_reg = ${LIVE_DEFAULTS.kReg.toFixed(2)} (uncalibrated)`;
+  if (kind === 'RERA') return 'list_rate − net_offer (no offer stated)';
+  return 'Floor sanity check only (weight 0%)';
+}
+
+/** Rate per sqft: the printed rate if stated, else price ÷ area. null if neither is usable. */
+export function pointRate(p: MarketDataPoint): number | null {
+  if (p.statedRatePerSqft && p.statedRatePerSqft > 0) return p.statedRatePerSqft;
+  if (p.priceInr && p.areaSqft && p.priceInr > 0 && p.areaSqft > 0) return p.priceInr / p.areaSqft;
+  return null;
+}
+
+/** Months between a printed date (YYYY, YYYY-MM or YYYY-MM-DD) and now; null if unparseable. */
+export function monthsSince(date: string | undefined, now: Date): number | null {
+  if (!date) return null;
+  const m = date.trim().match(/^(\d{4})(?:-(\d{1,2}))?/);
+  if (!m) return null;
+  const y = +m[1];
+  const mo = m[2] ? +m[2] - 1 : 5; // year only → assume mid-year
+  const months = (now.getFullYear() - y) * 12 + (now.getMonth() - mo);
+  return Math.max(0, months);
+}
+
+/** Unknown dates are treated conservatively as 12 months old. */
+export const UNKNOWN_AGE_MONTHS = 12;
+
+/** Tukey fences: flags values outside [Q1 − 1.5·IQR, Q3 + 1.5·IQR] (only applied when n ≥ 4). */
+export function outlierFlags(values: number[]): boolean[] {
+  if (values.length < 4) return values.map(() => false);
+  const s = [...values].sort((a, b) => a - b);
+  const q = (p: number) => {
+    const i = (s.length - 1) * p;
+    const lo = Math.floor(i);
+    const hi = Math.ceil(i);
+    return s[lo] + (s[hi] - s[lo]) * (i - lo);
+  };
+  const q1 = q(0.25);
+  const q3 = q(0.75);
+  const iqr = q3 - q1;
+  return values.map((v) => v < q1 - 1.5 * iqr || v > q3 + 1.5 * iqr);
+}
+
+/** Spatial tier from the median comparable distance: ≤1 km micro, ≤3 km ward, ≤10 km SRO, else district. */
+export function tierFromDistanceKm(km: number | null): SpatialTier {
+  if (km === null) return 'DISTRICT';
+  if (km <= 1) return 'MICRO_1KM';
+  if (km <= 3) return 'WARD_VILLAGE';
+  if (km <= 10) return 'SRO_ZONE';
+  return 'DISTRICT';
+}
+
+export function distanceKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
+  return haversineMeters(a.lat, a.lng, b.lat, b.lng) / 1000;
+}
+
+/** Removes duplicate data points (same URL + same rate, or same kind + locality + rate + area). */
+export function dedupePoints(points: MarketDataPoint[]): MarketDataPoint[] {
+  const seen = new Set<string>();
+  const out: MarketDataPoint[] = [];
+  for (const p of points) {
+    const r = pointRate(p);
+    const key = p.url ? `${p.url}|${r?.toFixed(0)}` : `${p.kind}|${(p.locality ?? '').toLowerCase()}|${r?.toFixed(0)}|${p.areaSqft ?? ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(p);
+  }
+  return out;
+}
+
+export interface LiveAggregation {
+  priceSources: PriceSourceInput[];
+  comparables: ComparablePin[];
+  circleRatePerSqft: number;
+  spatialTier: SpatialTier;
+  medianDistanceKm: number | null;
+  usable: number;
+  outliers: string[]; // point ids excluded as statistical outliers
+  missingRate: string[]; // point ids without a usable rate
+}
+
+/**
+ * Aggregates included data points into PRD §3.3 price sources:
+ *  raw rate = median of per-point rates · corrected = raw × correction factor ·
+ *  weight ∝ 1 / σ² with σ = standard error of corrected rates (prior 15% when n = 1) ·
+ *  medianAge = median of point ages · spatial tier from median comparable distance.
+ */
+export function aggregateLiveEvidence(points: MarketDataPoint[], subject: { lat: number; lng: number }, now: Date): LiveAggregation {
+  const included = dedupePoints(points.filter((p) => p.included));
+  const missingRate = included.filter((p) => pointRate(p) === null).map((p) => p.id);
+  const rated = included.filter((p) => pointRate(p) !== null);
+
+  // Outliers are judged within each kind (listings vs sales vs auctions differ structurally).
+  const outliers: string[] = [];
+  const kinds: MarketPointKind[] = ['SALE', 'LISTING', 'AUCTION', 'RERA', 'GUIDELINE'];
+  const clean: MarketDataPoint[] = [];
+  for (const k of kinds) {
+    const ks = rated.filter((p) => p.kind === k);
+    const flags = outlierFlags(ks.map((p) => pointRate(p)!));
+    ks.forEach((p, i) => (flags[i] ? outliers.push(p.id) : clean.push(p)));
+  }
+
+  const withDist = clean.map((p) => ({
+    ...p,
+    distanceKm: p.lat !== undefined && p.lng !== undefined ? distanceKm(subject, { lat: p.lat, lng: p.lng }) : undefined,
+  }));
+
+  // Guideline / circle rate → weight-0 floor check.
+  const guideline = withDist.filter((p) => p.kind === 'GUIDELINE').map((p) => pointRate(p)!);
+  const circleRatePerSqft = guideline.length ? median(guideline) : 0;
+
+  const marketKinds = kinds.filter((k) => k !== 'GUIDELINE');
+  const draft = marketKinds
+    .map((k) => {
+      const ps = withDist.filter((p) => p.kind === k);
+      if (!ps.length) return null;
+      const rates = ps.map((p) => pointRate(p)!);
+      const raw = median(rates);
+      const f = correctionFactor(k);
+      const corrected = raw * f;
+      const correctedRates = rates.map((r) => r * f);
+      const se = ps.length > 1 ? stdDev(correctedRates) / Math.sqrt(ps.length) : corrected * 0.15;
+      const ages = ps.map((p) => monthsSince(p.date, now) ?? UNKNOWN_AGE_MONTHS);
+      return { k, n: ps.length, raw, f, corrected, sigma: Math.max(se, corrected * 0.01), age: median(ages) };
+    })
+    .filter((x): x is NonNullable<typeof x> => !!x);
+
+  const weights = inverseVarianceWeights(draft.map((d) => d.sigma));
+  const priceSources: PriceSourceInput[] = draft.map((d, i) => ({
+    id: KIND_TO_SOURCE[d.k],
+    label: SOURCE_LABEL[d.k],
+    count: d.n,
+    rawRatePerSqft: Math.round(d.raw),
+    correctionFormulaLabel: correctionLabel(d.k),
+    correctionFactor: +d.f.toFixed(4),
+    correctedRatePerSqft: Math.round(d.corrected),
+    weight: +weights[i].toFixed(4),
+    medianAgeMonths: d.age,
+  }));
+  if (circleRatePerSqft > 0) {
+    priceSources.push({
+      id: 'CIRCLE_RATE',
+      label: SOURCE_LABEL.GUIDELINE,
+      count: guideline.length,
+      rawRatePerSqft: Math.round(circleRatePerSqft),
+      correctionFormulaLabel: correctionLabel('GUIDELINE'),
+      correctionFactor: 1,
+      correctedRatePerSqft: Math.round(circleRatePerSqft),
+      weight: 0,
+      medianAgeMonths: 0,
+    });
+  }
+
+  const comparables: ComparablePin[] = withDist
+    .filter((p) => p.kind !== 'GUIDELINE' && p.lat !== undefined && p.lng !== undefined)
+    .map((p) => {
+      const r = pointRate(p)!;
+      return {
+        id: p.id,
+        source: KIND_TO_SOURCE[p.kind],
+        lat: p.lat!,
+        lng: p.lng!,
+        distanceKm: +(p.distanceKm ?? 0).toFixed(2),
+        date: p.date ?? 'undated',
+        rawRate: Math.round(r),
+        adjustedRate: Math.round(r * correctionFactor(p.kind)),
+        note: `${p.title ?? p.propertyType ?? 'Market data point'}${p.locality ? ` — ${p.locality}` : ''}${p.origin === 'MANUAL' ? ' (manual entry)' : ''}`,
+        url: p.url,
+      };
+    });
+
+  const dists = withDist.filter((p) => p.kind !== 'GUIDELINE' && p.distanceKm !== undefined).map((p) => p.distanceKm!);
+  const medianDistanceKm = dists.length ? median(dists) : null;
+
+  return {
+    priceSources,
+    comparables,
+    circleRatePerSqft,
+    spatialTier: tierFromDistanceKm(medianDistanceKm),
+    medianDistanceKm,
+    usable: draft.reduce((s, d) => s + d.n, 0),
+    outliers,
+    missingRate,
+  };
+}

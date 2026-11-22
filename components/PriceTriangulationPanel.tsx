@@ -167,7 +167,15 @@ export default function PriceTriangulationPanel({ c, e }: { c: PropertyCase; e: 
                 {c.comparables.map((x) => (
                   <tr key={x.id}>
                     <td className="py-1 pr-2">{SOURCE_SHORT[x.source]}</td>
-                    <td className="py-1 pr-2 text-slate-500">{x.note}</td>
+                    <td className="py-1 pr-2 text-slate-500">
+                      {x.url ? (
+                        <a href={x.url} target="_blank" rel="noopener noreferrer" className="text-maroon underline">
+                          {x.note}
+                        </a>
+                      ) : (
+                        x.note
+                      )}
+                    </td>
                     <td className="py-1 text-right tabular-nums">{x.distanceKm} km</td>
                     <td className="py-1 text-right tabular-nums">{formatIndianNumber(x.adjustedRate)}</td>
                   </tr>
