@@ -9,45 +9,9 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import type { MapSpec } from '@/lib/mapGeometry';
+import { googleMapsAvailable, loadGoogleMaps, onGoogleAuthFailure } from '@/lib/googleMaps';
 
-const KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? '';
-
-declare global {
-  interface Window {
-    __pramaanGmReady?: () => void;
-    gm_authFailure?: () => void;
-  }
-}
-
-let loadPromise: Promise<void> | null = null;
-let authFailed = false;
-const authListeners = new Set<() => void>();
-
-export function googleMapsConfigured(): boolean {
-  return KEY.length > 0 && !authFailed;
-}
-
-function loadGoogleMaps(): Promise<void> {
-  if (!KEY) return Promise.reject(new Error('NEXT_PUBLIC_GOOGLE_MAPS_API_KEY not set'));
-  if (window.google?.maps?.Map) return Promise.resolve();
-  if (loadPromise) return loadPromise;
-  loadPromise = new Promise<void>((resolve, reject) => {
-    window.gm_authFailure = () => {
-      authFailed = true;
-      authListeners.forEach((f) => f());
-    };
-    window.__pramaanGmReady = () => resolve();
-    const s = document.createElement('script');
-    s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(KEY)}&v=weekly&callback=__pramaanGmReady`;
-    s.async = true;
-    s.onerror = () => {
-      loadPromise = null;
-      reject(new Error('Google Maps script failed to load (offline?)'));
-    };
-    document.head.appendChild(s);
-  });
-  return loadPromise;
-}
+export const googleMapsConfigured = googleMapsAvailable;
 
 const ll = ([lat, lng]: [number, number]) => ({ lat, lng });
 const dashIcons = (color: string, weight: number) => [
@@ -78,11 +42,10 @@ export default function GoogleMapView({ spec, height, onFail, onClick, onMarkerD
   // Load script + create the map once.
   useEffect(() => {
     let cancelled = false;
-    const fail = () => onFail('Google Maps rejected the API key');
-    authListeners.add(fail);
+    const off = onGoogleAuthFailure(() => onFail('Google Maps rejected the API key'));
     loadGoogleMaps()
       .then(() => {
-        if (cancelled || !el.current || authFailed) return;
+        if (cancelled || !el.current || !googleMapsAvailable()) return;
         map.current = new google.maps.Map(el.current, {
           center: ll(spec.center),
           zoom: spec.zoom,
@@ -102,7 +65,7 @@ export default function GoogleMapView({ spec, height, onFail, onClick, onMarkerD
       .catch((e: Error) => !cancelled && onFail(e.message));
     return () => {
       cancelled = true;
-      authListeners.delete(fail);
+      off();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

@@ -13,7 +13,6 @@ import {
   Loader2,
   MapPin,
   Plus,
-  Search,
   Trash2,
   XCircle,
 } from 'lucide-react';
@@ -26,6 +25,7 @@ import { SPATIAL_TIER_LABEL } from '@/lib/engines/price';
 import { USAGE_LABEL } from '@/lib/engines/usage';
 import { buildNewPropertyCase, EMPTY_FORM, snapshotMode, type NewPropertyForm } from '@/lib/data/newPropertyCase';
 import { PinMap } from '@/components/workbench/maps';
+import AddressAutocomplete, { type PickedPlace } from '@/components/AddressAutocomplete';
 import { RouteBadge, ScorePill } from '@/components/StatusBadges';
 
 interface GeoPlace {
@@ -73,8 +73,6 @@ export default function ValueNewPropertyPage() {
   const [f, setF] = useState<NewPropertyForm>(EMPTY_FORM);
   const set = <K extends keyof NewPropertyForm>(k: K, v: NewPropertyForm[K]) => setF((s) => ({ ...s, [k]: v }));
 
-  const [query, setQuery] = useState('');
-  const [geo, setGeo] = useState<{ busy: boolean; results: GeoPlace[]; error: string | null }>({ busy: false, results: [], error: null });
   const [snapshot, setSnapshot] = useState<LiveEvidenceSnapshot | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
   const [fetchState, setFetchState] = useState<{ busy: boolean; error: string | null; cached: LiveEvidenceSnapshot | null }>({ busy: false, error: null, cached: null });
@@ -85,20 +83,7 @@ export default function ValueNewPropertyPage() {
 
   /* ---------------- Location ---------------- */
 
-  const search = async () => {
-    if (query.trim().length < 3) return;
-    setGeo({ busy: true, results: [], error: null });
-    try {
-      const r = await fetch(`/api/geocode?q=${encodeURIComponent(query.trim())}`);
-      const j = (await r.json()) as { results?: GeoPlace[]; error?: string };
-      if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
-      setGeo({ busy: false, results: j.results ?? [], error: j.results?.length ? null : 'No matches — try a broader address, or click the map.' });
-    } catch (e) {
-      setGeo({ busy: false, results: [], error: `Geocoder unavailable (${e instanceof Error ? e.message : 'error'}) — click the map or type coordinates.` });
-    }
-  };
-
-  const choose = (p: GeoPlace) => {
+  const choose = (p: PickedPlace) => {
     setF((s) => ({
       ...s,
       lat: p.lat,
@@ -109,7 +94,6 @@ export default function ValueNewPropertyPage() {
       state: p.state ?? s.state,
       title: s.title || `Property — ${[p.locality, p.city].filter(Boolean).join(', ')}`,
     }));
-    setGeo((g) => ({ ...g, results: [] }));
   };
 
   const pick = async (lat: number, lng: number) => {
@@ -213,30 +197,11 @@ export default function ValueNewPropertyPage() {
         {/* ================= LEFT: property ================= */}
         <div className="space-y-5">
           <Card title="1 · Location" icon={<MapPin className="h-4 w-4 text-maroon" />}>
-            <div className="flex gap-2">
-              <input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && search()}
-                placeholder="e.g. Civil Lines, Nagpur  or  Koramangala 5th Block, Bengaluru"
-                className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm"
-              />
-              <button onClick={search} disabled={geo.busy} className="inline-flex items-center gap-1.5 rounded-lg bg-maroon px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">
-                {geo.busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />} Find
-              </button>
-            </div>
-            {geo.error && <p className="mt-1 text-xs text-remote">{geo.error}</p>}
-            {geo.results.length > 0 && (
-              <ul className="mt-2 divide-y divide-slate-100 rounded-lg border border-slate-200">
-                {geo.results.map((r) => (
-                  <li key={`${r.lat},${r.lng}`}>
-                    <button onClick={() => choose(r)} className="w-full px-3 py-2 text-left text-xs hover:bg-canvas">
-                      {r.displayName}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
+            <AddressAutocomplete
+              onSelect={choose}
+              bias={subject ? [subject.lat, subject.lng] : null}
+              placeholder="Start typing — e.g. Civil Lines Nag…, Koramangala 5th…, Thudiyalur…"
+            />
             <div className="mt-3">
               <PinMap center={subject ? [subject.lat, subject.lng] : [21.1458, 79.0882]} pin={subject ? [subject.lat, subject.lng] : null} onPick={pick} height={280} />
             </div>
