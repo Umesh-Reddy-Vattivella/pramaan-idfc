@@ -1,0 +1,211 @@
+================================================================================
+ PRAMAAN — DOUBTS & CLARIFICATIONS LOG
+ IDFC FIRST Bank · FAME 6.0 · Problem Statement 1 (LAP)
+ Live prototype : https://pramaan-idfc.vercel.app
+ Source code    : https://github.com/Umesh-Reddy-Vattivella/pramaan-idfc
+================================================================================
+
+ Purpose: record questions raised while reviewing the prototype, the verified answer,
+ and any follow-up action. Add new doubts at the bottom using the same format.
+
+
+--------------------------------------------------------------------------------
+ DOUBT #1
+ Date raised : 22 Nov 2026
+ Topic       : Engine 2 (Price & Authenticity) — the 6 price data sources
+--------------------------------------------------------------------------------
+
+ QUESTION
+   The walkthrough lists 6 price sources for Engine 2. Are these sources scraped from
+   real-time data, and are they accurate to the location of each property?
+
+ SHORT ANSWER
+   No. None of the 6 price sources are scraped or pulled from real-time data, and the
+   comparable pins on the map are not real transactions. The prototype has no live data
+   connections; all price data comes from the demo seed file lib/data/seedCases.ts.
+
+   The Engine 2 formulas (bias corrections, weighted consensus, Authenticity Score) are
+   real and correct — but the data they run on is a demo dataset that has not been checked
+   against actual registrations, listings or auctions near these properties.
+
+ WHERE EACH PIECE OF DATA COMES FROM
+
+   Item                                   Source                         Real for that location?
+   -------------------------------------  -----------------------------  ------------------------------
+   Property coordinates (all 4 cases)     IDFC sample reports, via       YES — actual parcel
+                                          PRD Section 4                  coordinates
+
+   Case 1 & R1 source figures             Stated in PRD Section 4        ILLUSTRATIVE — the PRD itself
+   (e.g. 12 deeds at Rs. 6,100 x 1.45)                                   calls the R1 numbers an
+                                                                         illustrative calibration, not
+                                                                         pulled registry data
+
+   R2 land rate Rs. 42,000/sqft;          IDFC sample reports, via       YES — as stated by the
+   R3 land rate Rs. 3,910/sqft and        PRD Section 4                  original valuers
+   guideline value Rs. 500/sqft
+
+   R2 & R3 source breakdowns (counts,     Created for the prototype so   NO — marked "CALIBRATED"
+   raw rates, corrections, weights)       the engines output exactly     in the code
+                                          Rs. 42,000 / Rs. 3,910 and
+                                          S = 74 / 78
+
+   Data ages and locality (spatial)       Created for the prototype to   NO
+   tiers used in the Authenticity Score   reproduce the PRD's scores
+
+   Comparable pins on the maps            Created for the prototype:     NO — positions are near the
+   (6-7 per city)                         placed 0.2-1 km from the       property, but the
+                                          property with plausible        transactions do not exist
+                                          rates, dates and real
+                                          locality names in the notes
+
+   Circle / guideline rates               Case 1 Rs. 2,800 and R3        Only R3's comes from the
+                                          Rs. 500 from the PRD;          actual report
+                                          R1 and R2 not stated
+                                          (shown as "not stated")
+
+ WHY THE PROTOTYPE DOES NOT USE LIVE DATA
+   Each source needs a proper, licensed data feed — not web scraping. Property portals'
+   terms generally forbid scraping, and a bank could not rely on scraped data for credit
+   decisions anyway. The production data rails would be:
+
+     1. Registered sale deeds   -> state IGR / registration portals, or RBIH's Unified
+                                   Lending Interface (ULI) data services (e.g. Square
+                                   Yards registration records on ULI)
+     2. Online portal listings  -> licensed listing feeds from property portals
+                                   (de-duplicated by photo/text hash)
+     3. Past IDFC reports       -> IDFC FIRST Bank's own internal valuation archive
+     4. Bank auction results    -> SARFAESI / bank e-auction portals
+     5. RERA / builder prices   -> state RERA portals and builder price lists
+     6. Circle / guideline rate -> state SRO guideline-value tables
+
+   This matches the PRD's pilot plan: back-test on 3-5 years of anonymised IDFC technical
+   reports (months 1-2), then connect live data during a 2-city shadow run (months 3-5),
+   then segment-wise go-live (month 6+).
+
+ HOW TO ANSWER THIS IF A PANELIST ASKS
+   "The engine logic — bias corrections, weighted consensus and the Authenticity Score — is
+   fully built and deterministic. For the prototype it runs on a demo dataset reconstructed
+   around IDFC's three sample reports; the real valuer-stated rates (Rs. 42,000 for R2,
+   Rs. 3,910 for R3) are exact. In the pilot, the same engine plugs into ULI registration
+   data, licensed listing feeds, IDFC's own report archive, bank auction portals and RERA."
+
+ RISK IF NOT CLARIFIED
+   In the live app the comparable pins look like real deals (e.g. "Regd. sale — residential
+   plot, NGGO Colony"). If a panelist assumes they are real transactions and later learns
+   they are not, it could damage credibility.
+
+ FOLLOW-UP ACTIONS (proposed, not yet done)
+   [ ] Label the comparables map, the 6-source table and the PDF annex as
+       "Illustrative demo data — live data feeds connect in pilot".
+   [ ] Rewrite the Engine 2 part of PRAMAAN_Website_Walkthrough.txt to state plainly that
+       the formulas are real but the source figures and comparable pins are demo data.
+
+ STATUS: Answered — follow-up actions pending decision.
+
+
+--------------------------------------------------------------------------------
+ DOUBT #2
+ Date raised : 22 Nov 2026
+ Topic       : Live pricing for a NEW property during the presentation (no seed file)
+--------------------------------------------------------------------------------
+
+ QUESTION
+   Engine 2 currently takes its prices from a seed file built around the uploaded IDFC
+   reports. If the panel asks for a live demonstration on a separate property, there is no
+   seed file for it. How can PRAMAAN price that property from real-time data?
+
+ SHORT ANSWER
+   A new "Value a New Property" page (/value) now prices ANY address in India from live,
+   citable market data. Live search only EXTRACTS printed prices with their source links;
+   Engine 2 computes every rate, correction, weight and the Authenticity Score. If live
+   search is unavailable, the presenter can type comparables in manually and the same
+   engine scores them. No seed file is needed.
+
+ HOW IT WORKS (BUILT 22 NOV 2026)
+   1. Locate the property — type an address (free OpenStreetMap geocoder) or click the map;
+      latitude / longitude can also be typed directly.
+   2. Enter property details from the deed / plan / owner — plot area, floors, age,
+      construction rate, usage, plan status, optional loan and rent.
+   3. "Fetch live market evidence" — Gemini (Flash, with automatic model fallback) runs
+      Google Search grounding and returns individual data points: listings, reported sales,
+      bank auction notices and the guideline / circle rate, each with its source URL.
+   4. Anti-hallucination check — a data point is kept only if its website domain is one that
+      Google actually cited for that answer. Points with no URL, no rate, or an area in units
+      other than sqft are rejected and listed with the reason.
+   5. Engine 2 (lib/engines/marketEvidence.ts) does all the maths:
+        rate = printed rate, or price / area · duplicates removed · statistical outliers
+        excluded (Tukey fences) · listings x 0.86 · auctions / 0.80 · reported sales x 1.00 ·
+        weights proportional to 1/sigma^2 · guideline rate = weight-0 floor check ·
+        spatial tier from the median comparable distance (<=1 km / <=3 km / <=10 km / district).
+   6. A live engine preview shows consensus rate, Authenticity Score, Market Value and route
+      while the presenter ticks / unticks data points.
+   7. "Create case & open Workbench" — the case opens like any other, with every source URL
+      clickable in the Evidence Drawer, comparables on the map, the report and the PDF.
+   8. Stage safety — each fetch is saved as a timestamped snapshot (replayable offline via
+      "Use cached snapshot"), and "Add comparable manually" works with no AI at all.
+
+ HONEST LIMITS (SAY THESE IF ASKED)
+   * Listings are asking prices; the 14% discount and the other corrections are defaults,
+     not calibrated per locality. Treat the result as an indicative market rate.
+   * Registered-deed data is not publicly available in real time, so "reported sales" come
+     from public web pages only. Bank-grade triangulation still needs ULI / licensed feeds.
+   * Coverage is good in metros and patchy in rural areas — the Authenticity Score drops
+     and the case routes to Remote Review / Physical Check automatically.
+   * A new property has no owner self-capture, so its Trust Layer is "not passed" and it
+     routes to Physical Check. A clearly labelled demo toggle ("Owner self-capture completed
+     — demo simulation") lets the presenter show the full route.
+   * Comparable pins sit at their locality's geocoded centre, not the exact plot.
+
+ BLOCKER FOUND DURING TESTING (22 NOV 2026)
+   The supplied Gemini API key works for normal requests, but every Google Search-grounded
+   request returns HTTP 429 "quota exceeded" on all Flash models. Search grounding is not
+   available on this key's free tier — BILLING MUST BE ENABLED on the key's Google Cloud /
+   AI Studio project before live search returns data. Until then the page falls back to
+   manual comparable entry (fully working).
+   Also: gemini-2.5-flash is retired for new users; the app now defaults to gemini-3.8-flash
+   and falls back through gemini-3.5-flash, gemini-flash-latest and gemini-3.5-flash-lite.
+
+ GOOGLE MAPS (REQUESTED 22 NOV 2026)
+   All maps (Workbench GIS & comparables, owner capture pin, new-property pin) now render
+   with the Google Maps JavaScript API when NEXT_PUBLIC_GOOGLE_MAPS_API_KEY is set, with an
+   automatic fallback to Esri / OpenStreetMap if the key is missing, rejected or offline.
+   The supplied key is a Gemini key and is NOT valid for Google Maps (Geocoding returned
+   "API key is invalid"), so a separate Maps JavaScript API key is needed, restricted by
+   HTTP referrer to pramaan-idfc.vercel.app (a Maps key is visible in the browser by design).
+
+ SECURITY NOTE
+   The Gemini key was shared in a chat message. It is stored only in .env.local (git-ignored)
+   and is NOT in the GitHub repo. Regenerate it after the presentation.
+
+ FOLLOW-UP ACTIONS
+   [x] Build live market evidence pipeline, /value page, manual fallback, snapshots
+   [x] Google Maps renderer with Esri / OpenStreetMap fallback
+   [x] 22 new automated checks (npm run verify: 82 / 82 pass)
+   [ ] Enable billing on the Gemini key's Google Cloud project (team action)
+   [ ] Create a Google Maps JavaScript API key, referrer-restricted (team action)
+   [ ] Add GEMINI_API_KEY (+ Maps key) to Vercel environment variables, then push & redeploy
+   [ ] Rehearse: run one live fetch per demo city the day before, so cached snapshots exist
+
+ STATUS: Built and verified locally — live search waiting on billing; not yet deployed.
+
+
+--------------------------------------------------------------------------------
+ DOUBT #3
+ Date raised :
+ Topic       :
+--------------------------------------------------------------------------------
+
+ QUESTION
+
+ SHORT ANSWER
+
+ DETAILS
+
+ FOLLOW-UP ACTIONS
+
+ STATUS:
+
+
+================================================================================
+ End of doubts log
+================================================================================

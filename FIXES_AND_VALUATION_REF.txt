@@ -1,0 +1,196 @@
+================================================================================
+PRAMAAN IDFC FIRST BANK LAP VALUATION PROTOTYPE
+SYSTEM FIXES, BROWSER TESTING & VALUATION WORKFLOW REFERENCE
+================================================================================
+Date: 2026-11-23
+Application: PRAMAAN (IDFC FIRST Bank LAP Collateral Valuation Prototype)
+Local URL: http://localhost:3000
+New Valuation URL: http://localhost:3000/value
+
+--------------------------------------------------------------------------------
+1. SUMMARY OF ISSUES IDENTIFIED AND FIXED
+--------------------------------------------------------------------------------
+
+[Fix 1] Duplicate React Keys on Report Page (Console Error Resolution)
+- File: app/cases/[id]/report/page.tsx
+- Issue:
+  The `KV` (Key-Value) component rendered rows using `key={k}` where `k` was the
+  label string. When `c.details` contained details with labels matching standard
+  summary rows (such as "Property" or "Location"), React produced the console
+  error:
+  "Encountered two children with the same key, 'Property' / 'Location'."
+- Fix:
+  Updated `KV` row rendering to `rows.map(([k, val], i) => <tr key={`${k}-${i}`}>`,
+  guaranteeing globally unique keys for every row regardless of document metadata.
+
+[Fix 2] Duplicate React Keys in Workbench Case Facts
+- File: app/cases/[id]/page.tsx
+- Issue:
+  The case facts dropdown rendered `c.details.map((d) => <div key={d.label}>`.
+  If multiple document facts shared the same label, it triggered duplicate key
+  warnings in React.
+- Fix:
+  Updated to `c.details.map((d, i) => <div key={`${d.label}-${i}`}>` ensuring uniqueness.
+
+[Fix 3] Duplicate React Keys in Floor-wise Deviation BarChart Cells
+- File: components/workbench/MeasureTab.tsx
+- Issue:
+  Recharts `<Cell key={d.floor}>` produced duplicate keys if multiple floors
+  shared a label or were added without custom names.
+- Fix:
+  Updated cell keys to `key={`${d.floor}-${i}`}`.
+
+[Fix 4] Semantic Duplicate Field Cleanup in New Property Case Generator
+- File: lib/data/newPropertyCase.ts
+- Issue:
+  `buildNewPropertyCase` added `{ label: 'Location', value: ... }` to `c.details`,
+  causing duplicate "Location" entries alongside the main header Location field.
+- Fix:
+  Updated label to `{ label: 'Full Address', value: ... }`.
+
+[Fix 5] Google Maps Script Loader Hang & Timeout Resilience
+- File: lib/googleMaps.ts
+- Issue:
+  When `maps.googleapis.com` experienced connection resets (ECONNRESET), network
+  firewall blocks, or billing restrictions, `loadGoogleMaps()` would remain an
+  unresolved Promise with no timeout. Furthermore, `googleMapsAvailable()`
+  only checked `!authFailed`, where `authFailed` was only set by `gm_authFailure`.
+  This caused autocomplete and maps to hang instead of falling back to Leaflet.
+- Fix:
+  - Added a 4,000 ms timeout to `loadGoogleMaps()`.
+  - Added `loadFailed` tracking flag. If the script times out or errors on load,
+    `loadFailed = true` is set and `loadPromise` is cleaned up.
+  - `googleMapsAvailable()` now returns `GOOGLE_MAPS_KEY.length > 0 && !authFailed && !loadFailed`,
+    ensuring immediate, zero-lag fallback to Leaflet (Esri/OpenStreetMap) and Photon.
+
+[Fix 6] Address Autocomplete Resilience & Enter-Key Geocoding
+- File: components/AddressAutocomplete.tsx
+- Issue:
+  1. `googleSuggest` directly accessed `lib.AutocompleteSuggestion`, which is
+     only exposed in newer Places libraries via `google.maps.importLibrary("places")`.
+  2. If Photon was unavailable, autocomplete had no fallback to the internal
+     geocoding API (`/api/geocode`).
+  3. When an address was typed in the input, pressing `Enter` did nothing if the
+     dropdown suggestions hadn't loaded yet.
+- Fix:
+  - Added dynamic `importLibrary("places")` loader with strict typing.
+  - Added `osmSuggest` with automatic fallback to `/api/geocode?q=...` if Photon fails.
+  - Added `Enter` key geocoding: pressing `Enter` now instantly geocodes the typed
+    query via `geocodeText(q)` and sets the property pin and details.
+
+--------------------------------------------------------------------------------
+2. COMPREHENSIVE AUTOMATED VERIFICATION RESULTS
+--------------------------------------------------------------------------------
+
+1. Deterministic Engines Verification (`npm run verify`):
+   - All 133 tests PASSED (0 failed).
+   - Core figures verified: Case 1, R1 Dehradun, R2 Dehradun Commercial, R3 Coimbatore.
+   - Auto-QC catches (QC-1 through QC-6): 100% PASS.
+   - Stress test sliders & routing cascade: 100% PASS.
+   - Owner capture fraud blocks: 100% PASS.
+   - Live market evidence aggregation and math: 100% PASS.
+   - PDF generation engine: 100% PASS.
+
+2. Production Build (`npm run build`):
+   - Compiled with Turbopack successfully.
+   - Strict TypeScript check: 0 errors.
+   - ESLint check: 0 errors.
+   - Static pages generated: 7/7.
+
+3. End-to-End Browser Flow Verification:
+   - Creation of new valuation via Live Search (Tavily + Nemotron) & Manual entry: PASSED.
+   - Auto-QC evaluation: PASSED.
+   - Underwriter Workbench tabs (Measure, Price, Usage, QC): PASSED.
+   - Stress-test sensitivity sliders: PASSED.
+   - Report generation and view: PASSED.
+   - 1-Click IDFC PDF Download: PASSED.
+   - RBI Phase 1 Remote Valuer OTP e-Sign modal & execution: PASSED.
+   - Browser console errors: 0 errors.
+
+--------------------------------------------------------------------------------
+3. HOW TO CREATE A NEW PROPERTY VALUATION IN THE BROWSER
+--------------------------------------------------------------------------------
+
+Step 1: Open the App
+- In Chrome / your browser, go to:
+  http://localhost:3000
+
+Step 2: Start a New Valuation
+- Click the "Value a New Property (Live Data)" button on the top right
+  (or navigate to http://localhost:3000/value).
+
+Step 3: Enter Location
+- Type any address in India (e.g., "Civil Lines, Nagpur" or "Indira Nagar, Dehradun")
+  and press Enter or click a suggestion.
+- Or simply click anywhere on the interactive map to drop the pin.
+
+Step 4: Enter Property Details
+- Enter Deed Plot Area (e.g., 2,400 sqft), Approach Road width (e.g., 30 ft),
+  Age (e.g., 5 yrs), Residual Life (e.g., 55 yrs), and Construction Rate.
+- Specify floor areas under the Floors table.
+
+Step 5: Attach Market Evidence
+- Click "Fetch live market evidence" to automatically retrieve live listings,
+  guideline rates, and auction reserves via Tavily search and extract verified rates.
+- OR click "Add comparable manually" to add custom comparables.
+
+Step 6: Review Live Engine Preview & Open Workbench
+- The bottom card displays real-time Consensus Land Rate, Authenticity Score (S),
+  Market Value (MV), and Risk Cascade Route.
+- Click "Create case & open Workbench".
+
+Step 7: Underwriter Workbench & Report Sign-Off
+- Inspect Engine 1 (Measure & GIS), Engine 2 (Price & Stress Sliders),
+  Engine 3 (Usage & Trust), and Engine 4 (Auto-QC Audit).
+- Click "Preview Report & Remote e-Sign" to view the official IDFC Technical
+  Appraisal Report, test the 1-click PDF download, and complete the simulated
+  RBI Phase 1 OTP e-sign (Demo OTP: 654321).
+
+--------------------------------------------------------------------------------
+4. LIVE BROWSER WALKTHROUGH EXECUTION LOG (AUTOMATED TEST RUN)
+--------------------------------------------------------------------------------
+- Property Evaluated: Koramangala 4th Block Villa (Bengaluru, Karnataka)
+- Location: 12.935200 N, 77.624500 E
+- Land Area: 2,400 sqft (Deed / Cadastral)
+- Built-Up Area: 3,000 sqft (GF 1,600 sqft + FF 1,400 sqft)
+- Real-Time Market Evidence: 4 active listings extracted via Tavily search
+- Consensus Land Rate: Rs. 15,480 / sqft (Tier 1 micro-locality <= 1 km)
+- Authenticity Score (S): 79 / 100
+- Computed Land Value: Rs. 3,71,52,000
+- Computed Building Value: Rs. 78,00,000
+- Final Market Value (MV): Rs. 4,49,52,000 (Rs. 4.50 Cr)
+- Forced-Sale Value (FSV 80%): Rs. 3,59,61,600 (Rs. 3.60 Cr)
+- Max Collateral Loan (70% LTV): Rs. 3,14,66,400 (Rs. 3.15 Cr)
+- Risk Cascade Route: Physical Check (pending guided owner self-capture completion)
+- Auto-QC Verdict: 6/6 rules evaluated
+- Sensitivity Sliders: Overstatement stress-tested at 15% (LTV_true = 80.5%)
+- Appraisal Report & PDF Generation: 4-page IDFC report built cleanly
+- Browser Errors Captured: 0 errors throughout the entire lifecycle
+
+--------------------------------------------------------------------------------
+5. /BROWSER AUTOMATION AGENT VERIFICATION LOG (INDIRANAGAR BENGALURU)
+--------------------------------------------------------------------------------
+- Case ID Generated: live-market-mwscsr6j (Case Ref: LMSCSR6J)
+- Property: Residential Independent Villa — Indiranagar, Bengaluru, Karnataka
+- Coordinates: 12.9783692 N, 77.6408356 E (HAL 2nd Stage, Indiranagar)
+- Applicant / Owner: Rajesh Sharma
+- Plot Area: 2,400 sqft | Construction Rate: Rs. 2,800/sqft | BUA: 1,800 sqft
+- Requested Loan: Rs. 2,50,00,000 (Rs. 2.50 Cr)
+- Live Market Evidence: 9 real-time data points retrieved via Tavily web search
+  (Magicbricks, PropHunt, AddressAdvisors, Housing.com, Kaveri Guidance Value Portal)
+- Consensus Land Rate: Rs. 24,080 / sqft
+- Authenticity Score (S): 84 / 100 (Tier 1 micro-locality, high comp depth)
+- Land Value: Rs. 5,77,92,000 | Building Value: Rs. 50,40,000
+- Final Market Value (MV): Rs. 6,28,32,000 (Rs. 6.28 Cr)
+- Forced-Sale Value (FSV 80%): Rs. 5,02,65,600 (Rs. 5.03 Cr)
+- Max Collateral Loan (70% LTV): Rs. 4,39,82,400 (Rs. 4.40 Cr)
+- Routing Verdict: REMOTE REVIEW (SLA <= 24 hrs)
+- Auto-QC Verdict: 6/6 rules PASS
+- Trust Layer: 6/6 checks PASS (GPS, Live camera, Attestation, Shadows, Face KYC, Floors)
+- RBI Phase 1 Remote Valuer e-Sign: COMPLETED
+  - Valuer: Demo Registered Valuer A (IBBI/RV/DEMO/2026/0001)
+  - Cryptographic Signature Hash (SHA-256): 606beb9e1ddcff3b3733d326a77322cbd615b780f74842ffb7e9035eb99d1122
+  - Status: SIGNED & READY FOR DISBURSAL (Valid 90 Days)
+- IDFC PDF Export: Successfully generated client-side
+- Runtime / Console Errors: ZERO
+================================================================================

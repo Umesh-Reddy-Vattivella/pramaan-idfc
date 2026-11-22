@@ -160,7 +160,7 @@ export function buildNewPropertyCase(
       : undefined,
     esignStatus: 'PENDING',
     details: [
-      { label: 'Location', value: f.address || [f.locality, f.city, f.state].filter(Boolean).join(', ') || '—' },
+      { label: 'Full Address', value: f.address || [f.locality, f.city, f.state].filter(Boolean).join(', ') || '—' },
       { label: 'Market evidence', value: evidenceLabel },
       { label: 'Spatial tier', value: agg.medianDistanceKm === null ? 'No geocoded comparables → District benchmark (penalised)' : `Median comparable distance ${agg.medianDistanceKm.toFixed(2)} km` },
       { label: 'Bias corrections', value: 'Default, uncalibrated: listings × 0.86 · auctions ÷ 0.80 · reported sales × 1.00 (locality calibration happens in pilot)' },

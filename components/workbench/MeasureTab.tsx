@@ -87,8 +87,8 @@ export default function MeasureTab({ c, e }: { c: PropertyCase; e: EvidencePack 
               <Legend wrapperStyle={{ fontSize: 12 }} />
               <Bar dataKey="reference" name={refLabel} fill={SERIES_REFERENCE} radius={[4, 4, 0, 0]} maxBarSize={28} />
               <Bar dataKey="actual" name="Actual (amber = tin shed / temporary)" fill={SERIES_ACTUAL} radius={[4, 4, 0, 0]} maxBarSize={28}>
-                {chartData.map((d) => (
-                  <Cell key={d.floor} fill={d.temporary ? SERIES_TEMPORARY : SERIES_ACTUAL} />
+                {chartData.map((d, i) => (
+                  <Cell key={`${d.floor}-${i}`} fill={d.temporary ? SERIES_TEMPORARY : SERIES_ACTUAL} />
                 ))}
               </Bar>
             </BarChart>

@@ -317,8 +317,8 @@ function KV({ rows }: { rows: [string, string][] }) {
   return (
     <table className="mt-1 w-full">
       <tbody className="divide-y divide-slate-100">
-        {rows.map(([k, val]) => (
-          <tr key={k}>
+        {rows.map(([k, val], i) => (
+          <tr key={`${k}-${i}`}>
             <td className="w-56 py-1.5 pr-3 align-top text-xs font-semibold uppercase tracking-wide text-slate-500">{k}</td>
             <td className="py-1.5 text-ink tabular-nums">{val}</td>
           </tr>

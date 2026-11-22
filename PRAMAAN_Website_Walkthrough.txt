@@ -1,0 +1,575 @@
+================================================================================
+ PRAMAAN — AI-Powered Digital Property Valuation & Technical Due Diligence Engine
+ IDFC FIRST Bank · FAME 6.0 Open Innovation Challenge 2026 · Problem Statement 1 (LAP)
+ Website & Repository Walkthrough — Flow of the Prototype and How It Solves the Problem
+================================================================================
+
+ Live prototype : https://pramaan-idfc.vercel.app
+ Source code    : https://github.com/Umesh-Reddy-Vattivella/pramaan-idfc  (public, branch main)
+ Hosting        : Vercel (auto-redeploys on every push to main)
+ Stack          : Next.js 15 (App Router) · React 19 · TypeScript (strict) · Tailwind CSS v4 ·
+                  Recharts · Leaflet (Esri World Imagery + OpenStreetMap) · jsPDF + autotable
+
+ Status at time of writing (22 Nov 2026): all 7 main pages return HTTP 200 on the live site,
+ the AI-upload API responds, and the built-in verification script passes 60 / 60 checks.
+
+
+--------------------------------------------------------------------------------
+ CONTENTS
+--------------------------------------------------------------------------------
+  1. The problem PRAMAAN solves
+  2. The core idea in one paragraph
+  3. Architecture: Trust Layer + 3 engines + Valuation + Auto-QC + Risk Cascade
+  4. Website flow, screen by screen
+       4.1  Tab 1 — Portfolio Command Center          (/)
+       4.2  Tab 2 — Owner Mobile Self-Capture          (/capture)
+       4.3  Tab 3 — Underwriter & Valuer Workbench     (/cases/[id])
+       4.4  Tab 4 — IDFC Report, PDF & Remote e-Sign   (/cases/[id]/report)
+       4.5  Live AI Upload                             (/api/analyze-live)
+  5. The four pre-loaded cases — what each one proves
+  6. Problem-to-solution map (each legacy pain point -> the feature that fixes it)
+  7. How PRAMAAN meets the bank's risk, authenticity and regulatory bar
+  8. Suggested live demo script (about 10 minutes)
+  9. GitHub repository tour
+ 10. Honest notes: what is real, what is simulated, what is calibrated
+
+
+================================================================================
+ 1. THE PROBLEM PRAMAAN SOLVES
+================================================================================
+
+ Loan Against Property (LAP) is one of India's fastest-growing secured lending segments
+ (industry book ~Rs. 15.95 Lakh Crore, +20% YoY), serving mainly MSMEs. Every loan depends on
+ an accurate collateral valuation, but that valuation is still done manually by third-party
+ agencies through a physical site visit.
+
+ What that costs IDFC FIRST Bank today:
+   * Turnaround time (TAT): 5-7 days typical; the 3 real IDFC sample reports took 10 days (R1)
+     and 18 days (R3) from site visit to e-signature.
+   * Valuation is the main bottleneck: once credit is decided, disbursal itself takes 2-3 hours.
+   * Cost: ~Rs. 3,000 + GST per file to the agency, plus rework.
+   * Quality: unrecorded "local enquiry" pricing with zero comparable evidence, and human errors
+     that slip through (the IDFC samples contain wrong amount-in-words, survey-number mismatches,
+     contradictory dates, and a 52.68% building deviation rated "Low" demolition risk).
+
+ Where the 7 days actually go (from the PRD's failure analysis):
+   1. Case & document collection ......... Day 1 (1-3 days of chasing missing documents)
+   2. Valuer allocation & scheduling ..... Day 1-2
+   3. Physical site visit ................ Day 2-3 (only ~0.5 day — less than 10% of elapsed time)
+   4. Plan vs actual & deviations ........ Day 3-4
+   5. Rate & comparables ................. Day 4-5 (broker phone calls, no audit trail)
+   6. Drafting, QC, e-sign & queries ..... Day 5-7 (up to 18 days)
+
+ Key insight: the site visit is a tiny part of the delay. ~70-80% of report fields already exist in
+ government/public databases or uploaded documents, and the valuation arithmetic is deterministic.
+ Only the market rate genuinely needs triangulated evidence.
+
+ What IDFC officials asked for:
+   * Speed: 30 minutes to 1 hour; 24 hours maximum for exceptions.
+   * "Zero or One": replace the physical visit and manual work — not just a helper app for valuers.
+   * Three hard pillars: (1) Measure without visiting, (2) Price without asking anyone,
+     (3) Read property usage from photos.
+   * Authenticity: "prices exist online, but price authenticity does not" — controls must match or
+     beat physical underwriting.
+
+
+================================================================================
+ 2. THE CORE IDEA IN ONE PARAGRAPH
+================================================================================
+
+ The property owner (or an authorised representative) captures the property on their own phone in
+ about 15 minutes, guided step by step and secured by an anti-fraud Trust Layer. Documents are
+ read by OCR (including Tamil and Hindi). Three deterministic engines then MEASURE the property,
+ PRICE it from 6 independent data sources with an auditable Authenticity Score, and confirm its
+ USAGE. A Valuation engine computes Market Value, Forced-Sale Value and the loan limit; Auto-QC
+ checks the report for the kinds of errors humans make; and a Risk Cascade routes the file to
+ INSTANT, REMOTE REVIEW or PHYSICAL CHECK based on how confident the evidence is. A registered
+ valuer reviews the evidence pack remotely and e-signs — so the bank stays RBI-compliant with zero
+ field visits on Day 1. Total: 30-55 minutes instead of 7-18 days.
+
+ The non-negotiable design rule: AI is used only to READ and CLASSIFY (documents, photos). Every
+ number — area, deviation, rate, score, value, route — is computed by plain TypeScript formulas in
+ lib/engines/. No AI ever does financial arithmetic, so every figure is reproducible and auditable.
+
+
+================================================================================
+ 3. ARCHITECTURE
+================================================================================
+
+   Owner phone capture ─┐
+   Documents (OCR) ─────┼─> TRUST LAYER ─> ENGINE 1 MEASURE ─> ENGINE 3 USAGE ─> ENGINE 2 PRICE
+   Satellite / GIS ─────┘                                                              │
+                                                                                       v
+          REMOTE VALUER e-SIGN  <── RISK CASCADE  <── AUTO-QC (6 rules)  <── VALUATION CALCULATOR
+
+ TRUST LAYER (lib/engines/trust.ts) — proves the capture happened at the right parcel, live, by the
+ right person, without omissions:
+   1. GPS-in-Parcel: capture point must be inside the parcel polygon (or within 25 m of centroid).
+   2. Live camera only + device attestation: blocks gallery uploads, rooted phones, mock-GPS apps.
+   3. Image forensics + sun-angle check: shadows must match the sun's position for that GPS + time.
+   4. Identity: selfie face-match to KYC (or to a registered representative for NRI/tenant cases).
+   5. Floor Coverage Lock: if floors walked inside < floors seen outside -> OMISSION_FRAUD_BLOCK.
+   6. Hindsight audit sampling: 3-5% of Instant files are flagged for post-disbursal physical audit.
+
+ ENGINE 1 — MEASURE (lib/engines/measure.ts)
+   * Net plot area A_net = min(deed area, record area) - road-widening loss
+   * Multi-source area reconciliation; flag if any source differs > 10%
+   * BUA deviation % = (actual - sanctioned) / sanctioned x 100 (tin sheds reported separately)
+   * Building area actually valued depends on plan policy:
+       plan exists -> min(actual, sanctioned); no plan + land-only policy -> 0;
+       no plan + institutional exception -> actual (flagged)
+   * Height from satellite shadow (floors = height / 3 m); known-object scaling (7 ft door)
+   * 4-direction boundary check (deed vs satellite) and GIS hazard overlays
+     (forest buffer, road widening, CRZ/waterbody, HT line, caution/negative areas)
+
+ ENGINE 2 — PRICE & AUTHENTICITY (lib/engines/price.ts)
+   Six sources, each with its known bias corrected:
+     Registered sale deeds  -> x k_reg (deeds are under-declared near circle rate)
+     Portal listings        -> x (1 - d) (asking price > closing price; de-duplicated)
+     Past IDFC reports      -> x HPI_now / HPI_then (indexed to today)
+     Bank auctions          -> / 0.80 (distressed prices lifted to market)
+     RERA / builder lists   -> - net offer value
+     Circle / guideline rate-> weight 0% (sanity floor only; e.g. 7.82x below market in R3)
+   * Consensus rate = weighted average of corrected rates, with a confidence range
+   * AUTHENTICITY SCORE S (0-100) = Agreement (/35) + Comps Depth (/25) + Recency (/20)
+     + Spatial Typicality (/20). Thin markets fall back 1 km -> Ward -> SRO -> District with a
+     transparent penalty, so weak evidence automatically routes to human review.
+   * Drift Guard: if hindsight audits show > 7% error in a locality, the Instant bar rises 80 -> 88.
+
+ ENGINE 3 — USAGE (lib/engines/usage.ts)
+   * Computer-vision usage from photos (kitchen = residential, signage/counters = commercial, ...)
+     cross-checked against records (EB tariff, property-tax class, zoning).
+   * LTV caps: Residential 70% > Commercial 60% > Mixed 55% > Industrial / Institutional 50%.
+   * Conflict rule: a conflict NEVER resolves upward — the lower LTV band is applied and the file
+     escalates.
+
+ VALUATION CALCULATOR (lib/engines/valuation.ts)
+   * Land + Building: Land = A_net x rate; Building = BUA_valued x construction rate (depreciated:
+     D = min(0.85, age / total life x 0.90)); MV = Land + Building + Amenities
+   * Comparable-sales method (RERA flats) and Income-capitalisation cross-check (leased commercial:
+     flag if income value differs > 15% from MV)
+   * FSV = MV x 0.80-0.85; Max Collateral Loan = LTV cap x MV
+   * Exact Indian Rupee words converter (Crore / Lakh / Thousand) — and a reverse parser used by QC
+
+ AUTO-QC (lib/engines/autoQc.ts) — 6 rules run on every report:
+   QC-1 Words vs figures · QC-2 Date chronology & TAT · QC-3 Deviation vs demolition risk ·
+   QC-4 Arithmetic & FSV recalculation · QC-5 Internal status contradictions ·
+   QC-6 Cross-document survey numbers & sanctioned-map geo-tag (> 25 m = fail)
+
+ RISK CASCADE (lib/engines/routing.ts)
+   INSTANT (30-55 min) — ALL of: S >= 80; Trust 100% pass; area within 10% and BUA deviation
+     <= 15%; usage confirmed by 2 sources; sanctioned plan, no survey/title mismatch, no critical
+     QC fail; MV <= Rs. 5 Cr.
+   REMOTE REVIEW (same day) — e.g. S 60-79, missing plan, survey mismatch, road widening / forest
+     review, irregular plot, yield variance > 15%, MV Rs. 5-15 Cr.
+   PHYSICAL CHECK (24-72 hrs) — e.g. S < 60, BUA deviation > 30% or unapproved floors/sheds, Trust
+     failure, severe usage conflict, commercial > Rs. 15 Cr with major deviation (dual valuation).
+
+ MASTER ORCHESTRATOR (lib/engines/evaluateCase.ts) runs everything in order and returns one
+ "Evidence Pack" that every screen and the PDF read from.
+
+
+================================================================================
+ 4. WEBSITE FLOW, SCREEN BY SCREEN
+================================================================================
+
+ The maroon top bar (IDFC brand colour #9C1D26) has 4 tabs and a "Demo Mode" pill:
+   Portfolio Command Center · Owner Self-Capture · Underwriter Workbench · IDFC Report & e-Sign
+ (Workbench and Report become active once a case is opened.)
+
+ All data lives in the browser (localStorage). Every number on every screen is recomputed live by
+ the engines. "Reset demo" on Tab 1 restores the 4 original cases.
+
+ ------------------------------------------------------------------------------
+ 4.1  TAB 1 — PORTFOLIO COMMAND CENTER   (https://pramaan-idfc.vercel.app/)
+ ------------------------------------------------------------------------------
+ Purpose: the credit head's view of the whole valuation pipeline.
+
+ a) Five KPI cards (headline figures from the PRD's portfolio targets; the small grey line under
+    each is computed live from the cases in the queue):
+      Median TAT 41 min vs 7 days · Instant Route Share 68% · Avg Authenticity Score 84/100 ·
+      Legacy QC Errors Caught 11 across 3 IDFC samples · Cost per File Rs. 480 vs Rs. 3,000+
+
+ b) Case Queue table — every case with: IDFC R1/R2/R3 or SHOWCASE tag, file & case ref, applicant,
+    Market Value (Rs. Cr and full Indian-format figure), Authenticity Score pill (green >= 80,
+    amber 60-79, red < 60), Auto-QC badge (e.g. "CRITICAL FAIL · 3 issues"), Routing badge with SLA,
+    PRAMAAN TAT vs struck-through legacy TAT, and an "Open Workbench" button. Signed cases show
+    "SIGNED & READY FOR DISBURSAL".
+    Filter pills: All / Instant / Remote Review / Physical Check (with counts).
+
+ c) Header buttons:
+      "+ Start Owner Self-Capture"       -> Tab 2
+      "Upload Live PDF / Photos (AI)"    -> AI extraction modal (section 4.5)
+      "IDFC Business Case / ROI Simulator" -> modal with 9 sliders (files/month, legacy vs PRAMAAN
+         cost per file, instant share, avg ticket, baseline conversion, conversion uplift, NIM,
+         processing fee) showing Year-1 P&L impact = valuation cost saving + incremental NII +
+         fees. Defaults are editable planning assumptions, clearly labelled as such.
+
+ How this solves the problem: gives management one screen showing speed, cost, risk mix and the
+ business case — the value of moving from 7 days to under an hour is visible in money terms.
+
+ ------------------------------------------------------------------------------
+ 4.2  TAB 2 — OWNER MOBILE SELF-CAPTURE SIMULATOR   (/capture)
+ ------------------------------------------------------------------------------
+ Purpose: replaces valuer scheduling and the site visit. Split screen:
+   LEFT  = a realistic 390 px phone frame (what the owner sees)
+   RIGHT = "PRAMAAN Trust & Extraction Telemetry Stream" (what the bank sees, in real time)
+
+ Toggle at the top: "Owner App" or "Zero-Install WhatsApp Rep Link" (for NRIs, tenants or
+ institutional site representatives — no app install needed; the phone frame re-skins and KYC
+ verifies the registered representative instead).
+
+ The 5-step guided flow (each "Continue" unlocks only when its step is genuinely complete):
+   Step 1 Consent & KYC — Aadhaar OTP via DigiLocker, PAN check, selfie face-match. Only masked
+          placeholders such as [Aadhaar OTP Verified] are ever shown — never real digits.
+   Step 2 Address & Parcel Pin — interactive satellite map. Tapping inside the plot boundary turns
+          "GPS-in-Parcel" green; toggles show the Master Plan road-widening and forest/hazard
+          overlays.
+   Step 3 Smart Document Upload — Sale Deed, Sanctioned Plan, EB bill, Property Tax (required) and
+          a Hindi land record (optional). Owner name, area and survey number are extracted
+          instantly and cross-checked; the deed vs land-record area difference (1,800 vs 1,795
+          sqft) is highlighted before the owner leaves the screen.
+   Step 4 Guided Capture — approach road width (door-scaled: 30.0 ft), exterior facade (floors
+          auto-counted from shadow: 9.2 m -> 3 floors), electricity meter (with a random live
+          prompt), then a floor-by-floor interior walkthrough. Every frame is logged with a signed
+          hash and a sun-angle check.
+   Step 5 Run 3-Engine Pipeline — a 1.5-second animated run (Trust -> Measure -> Usage -> Price ->
+          Auto-QC -> Risk Cascade). The new case is saved and its Workbench opens automatically.
+          A clean capture routes INSTANT (S 91, MV Rs. 1,75,60,200).
+
+ Telemetry panel (right): 6 live Trust badges (GPS, Live Camera, Device Attestation, Sun-Angle,
+ Face Match, Floor Coverage), a live extraction & cross-check table, and a terminal-style event log.
+
+ FRAUD SIMULATION BAR (bottom right) — three one-click demos for the stage:
+   (a) "Simulate Omission Fraud (Skip Top Floor)" -> owner skips the top floor; Floor Coverage Lock
+       raises OMISSION_FRAUD_BLOCK (exterior 3 floors > interior 2).
+   (b) "Simulate Mock GPS (180m Outside Parcel)" -> device position jumps 180 m away (red pin on the
+       map); GPS-in-Parcel and Device Attestation fail.
+   (c) "Simulate Gallery Upload / AI Photo" -> Live Camera and Sun-Angle forensics fail; frames
+       are rejected.
+   While any fraud is active, Step 5 shows "Submission halted by Trust Layer". Click the button
+   again to clear it.
+
+ How this solves the problem: valuer allocation (Days 1-2) is eliminated and the site visit
+ (Days 2-3) becomes a 15-minute owner capture. The Trust Layer answers the obvious objection —
+ "won't owners cheat?" — by blocking the three most common frauds live.
+
+ ------------------------------------------------------------------------------
+ 4.3  TAB 3 — UNDERWRITER & REMOTE VALUER WORKBENCH   (/cases/[id])
+ ------------------------------------------------------------------------------
+ Purpose: where the underwriter / remote valuer reviews the evidence pack in minutes.
+
+ Sticky Decision Header (always visible): case ref, title, Market Value, FSV, Max Collateral Loan at
+ the confirmed LTV cap, the Routing pill (click it to expand the exact pass/fail checklist of the 6
+ Instant gates plus every Remote/Physical trigger), and "Preview Report & Remote e-Sign".
+
+ EVIDENCE DRAWER: any dotted-underlined figure (MV, FSV, loan, land value, area, deviation %,
+ consensus rate, Authenticity Score, each source's corrected rate, yield...) can be clicked. A panel
+ slides in showing the exact formula, the raw inputs, the source document citation and an
+ audit-replay timestamp. This is the "zero audit trail" problem solved: every number explains
+ itself.
+
+ Four sub-tabs:
+
+ A · Engine 1 — Measure & GIS
+     * Area Reconciliation table: Sale Deed vs Patta/Cadastral vs Road widening -> Net valued area.
+     * Floor-wise Sanctioned (or Permissible) vs Actual BUA bar chart — tin sheds in amber (R2's
+       5th-floor tin shed stands out); deviation shown excluding and including temporary sheds.
+     * Satellite GIS map: parcel footprint, road-widening strip (amber) and, for R2, a dashed line
+       to the sanctioned-map geo-tag 74 m away from the real site. GIS hazard chips above the map.
+     * 4-direction E/W/N/S boundary matrix (deed vs site).
+     * Vernacular OCR cards: Hindi Forest Division RTI (R1), Tamil Patta + Sale Deed (R3).
+
+ B · Engine 2 — Price & Authenticity (the key "wow" screen)
+     * 6-source bias-correction table + bar chart (raw vs corrected, with the consensus line).
+     * Authenticity Score radial gauge with the 4 sub-score bars (/35, /25, /20, /20).
+     * Comparables map: nearby registered sales, listings, past IDFC reports and auctions as
+       colour-coded pins (hover for rate, date, distance), with a table view.
+     * LIVE STRESS-TEST & SENSITIVITY PANEL — four sliders:
+         (1) Comps count  (2) Source variance / CV %  (3) Spatial fallback tier (1 km -> District)
+         (4) Market overstatement x
+       They recompute the Score, the Effective LTV (LTV_true = LTV_stated x (1 + x)) and the
+       Routing tier live. Example on the clean Nagpur case: x = 5% turns 70% LTV into 73.5% and
+       flips INSTANT -> REMOTE REVIEW; cutting comps to 3 at District tier drops S to 54 and flips
+       to PHYSICAL CHECK. This shows panelists exactly how the system protects itself when
+       evidence is weak.
+
+ C · Engine 3 — Usage & Trust
+     * Annotated photo cards with CV detections (e.g. "Residential Kitchen 98%", "Commercial
+       Signage 96%", "5th Floor Tin Shed 94%").
+     * Dual-source verification card: CV vs utility/tax/zoning records, the LTV cap applied, and
+       the rule that conflicts never resolve upward.
+     * 6 green/red Trust Layer telemetry badges + the hindsight-audit sampling status.
+
+ D · Auto-QC & Legacy Error Audit
+     For each of the 6 rules, side by side: "What the legacy human report missed" vs "What PRAMAAN
+     flagged on Day 0", with status badge and required action. (Section 5 lists every catch.)
+
+ How this solves the problem: Steps 4 (plan vs actual), 5 (rate & comps) and most of 6 (QC) take
+ minutes instead of days, and every figure has an audit trail — which is what turns online price
+ data into AUTHENTICATED price evidence.
+
+ ------------------------------------------------------------------------------
+ 4.4  TAB 4 — AUTO-GENERATED IDFC REPORT, PDF & REMOTE e-SIGN   (/cases/[id]/report)
+ ------------------------------------------------------------------------------
+ Purpose: replaces manual drafting and the 9-15 day sign-off lag.
+
+ * A print-layout IDFC FIRST Bank Technical Appraisal Report, auto-filled:
+     1 Basic Details · 2 Locality, Geo-coordinates & GIS · 3 Building & Floor-wise Deviation table ·
+     4 Land & Building Valuation table with amount in words, FSV, LTV and loan ·
+     5 Income Yield Cross-Check (leased commercial) · 6 Boundaries · 7 Auto-QC Remarks ·
+     8 Annex: price evidence, geo-coordinates & comparables · 9 Digital Signature Block
+ * "Download IDFC PDF Report" — one click produces a clean 4-page PDF (jsPDF + autotable) with the
+   maroon header, page numbers, every table, the risk-cascade gates and the signature block.
+ * "Remote Registered Valuer e-Sign (RBI Phase 1)" — a 3-step modal:
+     1) pick an empanelled valuer and tick the 6-item evidence checklist;
+     2) enter the OTP (demo OTP 482613 is shown on screen);
+     3) the case is stamped with valuer name, IBBI registration no., timestamp, "Valid 90 Days" and
+        a SHA-256 seal of the evidence pack. Status becomes SIGNED & READY FOR DISBURSAL (also shown
+        in the Tab 1 queue and in the PDF).
+ * Physical Check cases (e.g. R2) cannot be remote-signed; they get "Escalate to Physical
+   Inspection" instead — high-risk files never take the remote path.
+
+ How this solves the problem: drafting is zero (the report writes itself from the evidence pack),
+ and sign-off goes from 10-18 days to minutes while keeping a registered valuer accountable — the
+ RBI independent-valuer requirement is met without a field visit.
+
+ ------------------------------------------------------------------------------
+ 4.5  LIVE AI UPLOAD   (Tab 1 button -> POST /api/analyze-live)
+ ------------------------------------------------------------------------------
+ * Upload a real appraisal PDF and/or property photos (PDF/JPG/PNG/WEBP/HEIC, up to 8 files, 18 MB).
+ * With a GEMINI_API_KEY configured, Gemini 2.5 Flash extracts ONLY the values printed in the
+   document into a strict JSON schema (it is explicitly told not to calculate anything). A
+   sanitiser validates every field and masks any 12-digit ID number.
+ * The extracted values are passed through the same deterministic engines; the modal shows the
+   extracted fields, the engine's MV / Score / Route, and "Save case & open Workbench".
+ * No key, AI failure, or no internet -> "Simulated Extraction Mode": a clearly labelled demo
+   extraction, so the stage demo never errors. (The live site currently runs in this mode.)
+ * Uploaded reports have no PRAMAAN live capture, so their Trust Layer is marked "not passed" and
+   they are priced from a single stated rate — PRAMAAN deliberately routes them conservatively and
+   asks for an owner self-capture.
+
+
+================================================================================
+ 5. THE FOUR PRE-LOADED CASES — WHAT EACH ONE PROVES
+================================================================================
+
+ Case 1 — Clean Showcase · Dharampeth, Nagpur · IDFC-PRM-2026-001  ->  INSTANT (green)
+   G+1 residential, age 4. Deed 2,400 / cadastral 2,390 sqft -> net 2,390 sqft. BUA 2,860 vs
+   sanctioned 2,800 = 2.14% deviation (PASS). 56 comparables across 4 sources; consensus
+   Rs. 7,560/sqft (circle rate Rs. 2,800 = 2.7x gap); S = 91 (1 km micro-locality).
+   Land Rs. 1,80,68,400 + Building Rs. 54,60,000 = MV Rs. 2,35,28,400 (~Rs. 2.35 Cr);
+   FSV (85%) Rs. 1,99,99,140; Max loan (70% LTV) Rs. 1,64,69,880.
+   All 6 Trust checks PASS, all 6 Auto-QC rules PASS, all 6 Instant gates PASS — 38 minutes,
+   ready for 1-click remote e-sign.
+   PROVES: the straight-through path works end to end when evidence is strong.
+
+ Case 2 — IDFC Sample Report 1 (R1) · Chandrabadni, Dehradun (residential) · IDFC/UKDDN26051909
+   -> REMOTE REVIEW (amber)
+   Legacy: Black Olive Ventures, visit 25/05/2026 -> signed 04/06/2026 = 10-day TAT; valuer stated
+   Rs. 9,000/sqft with ZERO comparables.
+   PRAMAAN: 24 m Master Plan road widening removes 282 sqft (3,831 -> 3,549 sqft net). No
+   sanctioned plan -> bank policy values LAND ONLY. BUA 4,278 vs permissible 3,721 = 14.96%.
+   52 comparables give a consensus of Rs. 9,060/sqft (S = 84).
+   MV Rs. 3,19,41,000 (Rs. 3.19 Cr, at the legacy Rs. 9,000 baseline; PRAMAAN consensus value
+   Rs. 3,21,53,940 shown alongside); FSV (80%) Rs. 2,55,52,800.
+   Catches: QC-5 FAIL — Stage of Construction "100%" while remarks say "under-construction
+   property"; QC-2 WARN — 10-day sign-off lag; plus missing plan, road widening, irregular plot and
+   forest-buffer review (Hindi Forest Division RTI read by vernacular OCR confirms Khasra 2206 &
+   2221 are not forest land).
+   PROVES: PRAMAAN backs the valuer's rate with 52 comparables, and correctly sends policy
+   exceptions to a same-day human review instead of auto-approving them.
+
+ Case 3 — IDFC Sample Report 2 (R2) · RS Tower, Rajpur Road, Dehradun (commercial)
+   · IDFC/UKDDN26061359  ->  PHYSICAL CHECK (red)
+   Leased to IDFC FIRST Bank itself at Rs. 16,00,000/month. Net plot 4,139 sqft after 33 m road
+   widening. Sanctioned BUA 13,611 sqft vs actual 20,782 sqft RCC = 52.68% deviation (81.85%
+   including a 3,970 sqft 5th-floor tin shed).
+   Land 4,139 x Rs. 42,000 = Rs. 17,38,38,000 + Building 13,611 x Rs. 2,000 = Rs. 2,72,22,000
+   -> MV Rs. 20,10,60,000 (Rs. 20.11 Cr); FSV Rs. 16,08,48,000; gross rental yield 9.55% (income
+   value within 15% of MV); S = 74.
+   Catches: QC-3 CRITICAL FAIL — 52.68% deviation + unapproved tin shed rated "Low" demolition risk
+   in the legacy report; QC-6 FAIL — sanctioned map OC/0015/24-25 is geo-tagged 74 m away from the
+   real site. Policy gate: commercial > Rs. 15 Cr with > 30% deviation -> dual valuation &
+   physical audit. Remote e-sign is disabled for this case.
+   PROVES: PRAMAAN is not a rubber stamp — it catches what a human missed and escalates high-risk,
+   high-ticket assets.
+
+ Case 4 — IDFC Sample Report 3 (R3) · NGGO Colony, Thudiyalur, Coimbatore (residential)
+   · ADR/CBE/July/26/IDFC/022  ->  REMOTE REVIEW (amber, hold for Rectification Deed)
+   Legacy: Adroit Technical Services, visit 07.08.2026 -> signed 25.08.2026 = 18-day TAT.
+   Deed 6,000 vs Tamil Patta 5,920 sqft -> least area valued. Land Rs. 3,910/sqft vs TNREGINET
+   guideline Rs. 500 = 7.82x gap (proof that circle rates cannot price LAP). Depreciation 21.36%.
+   Land Rs. 2,31,47,200 + Building Rs. 93,28,000 + Amenities Rs. 15,00,000 = MV Rs. 3,39,75,200
+   (Rs. 3.40 Cr); FSV (85%) Rs. 2,88,78,920; max loan (70%) Rs. 2,37,82,640; a Rs. 2.0 Cr request
+   = 58.8% LTV; S = 78.
+   Catches (the showstopper):
+     QC-1 CRITICAL FAIL — legacy report writes the value as "Fifty Five Lakh Sixty Thousand and
+          Twenty Rupees Only" (= Rs. 55,60,020) for a Rs. 3,39,75,200 property. PRAMAAN prints the
+          correct words: "Three Crore Thirty Nine Lakh Seventy Five Thousand Two Hundred Rupees Only".
+     QC-6 FAIL — Sale Deed lists only SF 173A/1F; the Tamil Patta lists 165/21, 173A/1A, 174A/1F
+          -> Rectification Deed needed. Bonus: the human valuer even transposed subdivision numbers
+          in Remark 5 (wrote 174A/1A, which exists in neither document).
+     QC-2 FAIL — cover page says visit 07.08.2026, Remark 1 says "inspected on 04.07.2026", e-sign
+          25.08.2026 (18-day lag).
+   PROVES: Day-0 automated QC catches legal and arithmetic errors that would otherwise reach
+   disbursal.
+
+ Together the 4 cases show all three routes (Instant, Remote Review, Physical Check) and 8 distinct
+ legacy errors caught across IDFC's own sample reports.
+
+
+================================================================================
+ 6. PROBLEM-TO-SOLUTION MAP
+================================================================================
+
+ Legacy pain point                          PRAMAAN feature (where to see it)            Time
+ ----------------------------------------   ------------------------------------------   --------------
+ 1. Chasing documents (1-3 days)            Owner uploads + instant OCR & cross-check     Day 1 -> 5 min
+                                            (Tab 2, Step 3)
+ 2. Valuer allocation & scheduling          Eliminated — owner / WhatsApp rep captures    Days 1-2 -> 0
+                                            on demand (Tab 2)
+ 3. Physical site visit                     Guided 15-min self-capture + satellite/GIS,   Days 2-3 -> 15 min
+                                            secured by the Trust Layer (Tab 2, Tab 3-A)
+ 4. Plan vs actual comparison               Engine 1 deviation table & chart, plan        Days 3-4 -> 1 min
+                                            policy rules (Tab 3-A)
+ 5. Broker "local enquiry" pricing          Engine 2: 6 sources, bias correction,         Days 4-5 -> 1 min
+                                            Authenticity Score, comps map (Tab 3-B)
+ 6. Drafting, QC, e-sign (up to 18 days)    Auto-report, 6 Auto-QC rules, 1-click PDF,    Days 5-7 -> 5-30 min
+                                            remote valuer OTP e-sign (Tab 3-D, Tab 4)
+ Usage misdeclaration (LTV risk)            Engine 3 CV + records; conflicts take the     instant
+                                            lower LTV (Tab 3-C)
+ Owner fraud (hidden floors, fake GPS,      Trust Layer + Fraud Simulation Bar (Tab 2)    blocked live
+ old photos)
+ Zero audit trail                           Evidence Drawer on every figure (Tab 3)       click
+ Overstated value -> hidden LTV risk        Stress-test: LTV_true = LTV_stated x (1+x)    live
+                                            (Tab 3-B)
+ Thin / rural markets                       Spatial fallback penalty -> Remote/Physical   automatic
+ High-ticket & heavy deviation              Rs. 5 Cr / Rs. 15 Cr policy gates, dual       automatic
+                                            valuation (Risk Cascade)
+ Business case                              ROI simulator (Tab 1)                         live
+
+ The three pillars IDFC asked for:
+   (1) Measure without visiting -> Engine 1 + guided capture + satellite/cadastral GIS
+   (2) Price without asking anyone -> Engine 2 triangulation + Authenticity Score
+   (3) Read usage from photos -> Engine 3 computer vision + dual-source verification
+
+
+================================================================================
+ 7. HOW PRAMAAN MEETS THE BANK'S RISK, AUTHENTICITY AND REGULATORY BAR
+================================================================================
+
+ * Price authenticity, not just price: every rate is bias-corrected, weighted, scored 0-100 and
+   traceable to its sources. Low agreement, few comps, stale data or a thin market lower S, and a
+   low S automatically forces human review.
+ * Deterministic and auditable: all math lives in lib/engines/ as pure TypeScript. The same inputs
+   always give the same outputs; `npm run verify` checks 60 exact figures and behaviours.
+ * Confidence-gated automation: only files that pass ALL 6 gates take the Instant path; everything
+   else goes to Remote Review (same day) or Physical Check (24-72 hrs).
+ * Conservative by construction: usage conflicts take the lower LTV; Physical Check files cannot be
+   remote-signed; uploaded reports without a live capture are not trusted.
+ * Fraud resistance: GPS-in-parcel, live-camera-only, device attestation, sun-angle forensics, face
+   match and the Floor Coverage Lock — each demonstrable live on Tab 2.
+ * RBI compliance (Phase 1): AI does 100% of measurement, pricing, usage, QC and drafting; an
+   empanelled registered valuer audits the evidence pack and e-signs remotely — zero field visits,
+   zero manual drafting, independent valuation preserved.
+ * Continuous learning: hindsight audits of 3-5% of Instant files feed the Drift Guard, which
+   tightens the Instant threshold (80 -> 88) in any locality where errors exceed 7%.
+ * Works offline: all calculations, charts, PDF export and e-sign run in the browser; if the venue
+   Wi-Fi drops, only the map tiles fall back to a styled placeholder with an "Offline" notice.
+
+ Business impact (PRD Section 1.5, for the pitch):
+   * Valuation opex: Rs. 6-13 Cr/year direct savings for IDFC in Year 1 (Rs. ~480 vs Rs. 3,000+ per
+     file on 65% of files).
+   * Conversion: cutting TAT from 5-7 days to < 1 hour reduces MSME attrition to faster NBFCs;
+     a 2-3% pull-through lift = Rs. 800-1,200 Cr/year incremental LAP disbursals.
+   * Portfolio monitoring: monthly automated revaluation of the existing LAP book at near-zero cost.
+
+
+================================================================================
+ 8. SUGGESTED LIVE DEMO SCRIPT (ABOUT 10 MINUTES)
+================================================================================
+
+  1. Tab 1 (1 min): KPI strip -> case queue -> filter Instant / Remote / Physical -> open the ROI
+     Simulator and move "Conversion uplift" to show the Year-1 P&L.
+  2. Tab 2 (3 min): Owner App. KYC -> tap inside the parcel -> upload 4 documents (+ Hindi record
+     to show the area mismatch) -> capture road, facade, meter, 3 floors. Click "Simulate Omission
+     Fraud" -> red block -> clear it. Click "Simulate Mock GPS" -> red pin 180 m away -> clear it.
+     Run the pipeline -> new case opens INSTANT in the Workbench.
+  3. Tab 3 on R2 (2 min): Measure tab -> tin shed in the chart, 74 m dashed geo-tag line on the
+     map. Auto-QC tab -> the "Low" demolition-risk CRITICAL FAIL.
+  4. Tab 3 on Case 1, Price tab (2 min): gauge and sources -> click the consensus rate to open the
+     Evidence Drawer -> drag "Market Overstatement" to 5% (route flips to Remote) and cut comps to
+     show Physical.
+  5. Tab 3 on R3, Auto-QC tab (1 min): "Fifty Five Lakh" words error, Tamil Patta survey mismatch
+     and the 174A/1A transposition, the 04 Jul vs 07 Aug date conflict.
+  6. Tab 4 on R3 or Case 1 (1 min): Download the IDFC PDF -> Remote e-Sign: tick checklist ->
+     OTP 482613 -> SIGNED & READY FOR DISBURSAL. Show R2's report: remote sign is blocked.
+
+  Tip: press "Reset demo" on Tab 1 before presenting to restore the 4 original cases.
+
+
+================================================================================
+ 9. GITHUB REPOSITORY TOUR   (https://github.com/Umesh-Reddy-Vattivella/pramaan-idfc)
+================================================================================
+
+  app/
+    layout.tsx                       IDFC maroon shell, top navigation, case-store provider
+    page.tsx                         Tab 1 — Portfolio Command Center
+    capture/page.tsx                 Tab 2 — Owner Mobile Self-Capture + Fraud Lab
+    cases/[id]/page.tsx              Tab 3 — Underwriter Workbench
+    cases/[id]/report/page.tsx       Tab 4 — IDFC Report, PDF, e-Sign
+    api/analyze-live/route.ts        Live Vision AI extraction (Gemini) + offline fallback
+  lib/
+    types.ts                         All TypeScript data types (PropertyCase etc.)
+    engines/                         ALL deterministic logic — trust, measure, price, usage,
+                                     valuation (incl. Rupee words), autoQc, routing, stressTest,
+                                     roi, evaluateCase (master orchestrator)
+    data/seedCases.ts                Case 1 + IDFC R1, R2, R3 with comparables
+    data/captureTemplate.ts          Demo property used by the self-capture simulator
+    live/extraction.ts               AI extraction schema, sanitiser, offline simulator
+    pdf/generateIdfcPdf.ts           Multi-page IDFC report PDF
+    esign.ts, evidence.ts, state/    e-sign seal, Evidence Drawer content, localStorage store
+  components/                        Maps (Leaflet, loaded client-side only), charts, modals,
+                                     telemetry panel, QC panel, badges, top nav
+  scripts/verify-engines.ts          `npm run verify` — 60 Definition-of-Done assertions
+  prd.md                             The full product requirements document
+  README.md, .env.example            Setup notes; optional GEMINI_API_KEY
+
+  Run locally:  npm install  ->  npm run dev  (http://localhost:3000)
+                npm run verify  (60 checks)  ·  npm run build
+
+
+================================================================================
+ 10. HONEST NOTES — WHAT IS REAL, SIMULATED OR CALIBRATED
+================================================================================
+
+  Real and exact
+   * Every figure stated in the PRD for Case 1, R1, R2 and R3 (areas, rates, MV, FSV, deviation,
+     yield, scores, routes and the QC catches) is reproduced exactly by the engines and asserted
+     by `npm run verify`.
+   * All formulas follow PRD Section 3; the PDF, maps, charts, stress test and fraud blocks run
+     on those real engine outputs.
+
+  Simulated for the prototype
+   * KYC, OTP, face match, device attestation, camera frames and document uploads in Tab 2 are
+     simulated; no real Aadhaar/PAN data is ever displayed.
+   * Photo cards in Tab 3-C are placeholder graphics with annotated detections (no real photos).
+   * The e-sign is a demo flow with fictional valuers (IBBI/RV/DEMO/...) and a SHA-256 seal; it is
+     not a legally valid digital signature.
+   * The live site has no Gemini key, so AI upload runs in Simulated Extraction Mode.
+   * Map parcel shapes are illustrative squares sized to the deed area; R2's 74 m offset direction
+     is not stated in the report and is drawn to the north-east.
+
+  Calibrated (values the PRD does not state, chosen so the engines reproduce the PRD's outputs)
+   * PRAMAAN TAT for R1/R2/R3 (43, 49, 39 min), CV confidence for R1/R2/R3, source data ages and
+     spatial tiers, and the full price-source breakdown for R2 and R3 (the PRD gives only their
+     final rate and score). These are marked "CALIBRATED" in lib/data/seedCases.ts.
+   * KPI headline numbers on Tab 1 are the PRD's portfolio-level targets; the live sub-lines under
+     each card are computed from the 4-5 demo cases and naturally differ.
+   * Stress-test policy (LTV_true above the cap -> Remote; 10+ points above -> Physical) and the
+     ROI simulator defaults are prototype assumptions, labelled as such in the app.
+
+================================================================================
+ End of walkthrough
+================================================================================

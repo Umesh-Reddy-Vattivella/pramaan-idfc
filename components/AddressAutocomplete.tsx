@@ -66,20 +66,31 @@ interface GPrediction {
   };
 }
 interface GPlacesLib {
-  AutocompleteSuggestion: { fetchAutocompleteSuggestions: (r: Record<string, unknown>) => Promise<{ suggestions: { placePrediction: GPrediction | null }[] }> };
-  AutocompleteSessionToken: new () => unknown;
+  AutocompleteSuggestion?: { fetchAutocompleteSuggestions: (r: Record<string, unknown>) => Promise<{ suggestions: { placePrediction: GPrediction | null }[] }> };
+  AutocompleteSessionToken?: new () => unknown;
 }
 
 let sessionToken: unknown = null;
 
 async function googleSuggest(q: string, bias: [number, number] | null): Promise<Suggestion[]> {
   await loadGoogleMaps();
-  const lib = (google.maps as unknown as { places: GPlacesLib }).places;
+  let lib: GPlacesLib | undefined = (google.maps as unknown as { places?: GPlacesLib })?.places;
+  if (typeof (google.maps as unknown as { importLibrary?: (n: string) => Promise<unknown> }).importLibrary === 'function') {
+    try {
+      const imported = await (google.maps as unknown as { importLibrary: (n: string) => Promise<unknown> }).importLibrary('places');
+      lib = imported as GPlacesLib;
+    } catch {
+      /* fallback */
+    }
+  }
+  if (!lib?.AutocompleteSuggestion || !lib?.AutocompleteSessionToken) {
+    throw new Error('Places AutocompleteSuggestion not available');
+  }
   if (!sessionToken) sessionToken = new lib.AutocompleteSessionToken();
   const req: Record<string, unknown> = { input: q, sessionToken, includedRegionCodes: ['in'] };
   if (bias) req.locationBias = { center: { lat: bias[0], lng: bias[1] }, radius: 50000 };
   const { suggestions } = await lib.AutocompleteSuggestion.fetchAutocompleteSuggestions(req);
-  return suggestions
+  return (suggestions ?? [])
     .map((s) => s.placePrediction)
     .filter((p): p is GPrediction => !!p)
     .map((p) => ({
@@ -102,6 +113,28 @@ async function googleSuggest(q: string, bias: [number, number] | null): Promise<
         };
       },
     }));
+}
+
+async function osmSuggest(q: string, bias: [number, number] | null, signal: AbortSignal): Promise<Suggestion[]> {
+  try {
+    const res = await photonSuggest(q, bias, signal);
+    if (res.length > 0) return res;
+  } catch {
+    /* fallback to internal geocode */
+  }
+  try {
+    const res = await fetch(`/api/geocode?q=${encodeURIComponent(q)}`, { signal });
+    if (!res.ok) return [];
+    const j = (await res.json()) as { results?: PickedPlace[] };
+    return (j.results ?? []).map((p, i) => ({
+      id: `local-${i}-${p.lat},${p.lng}`,
+      main: p.displayName.split(',')[0],
+      secondary: p.displayName.split(',').slice(1).join(', ').trim(),
+      resolve: async () => p,
+    }));
+  } catch {
+    return [];
+  }
 }
 
 /* ---------------- One-shot geocoding (document addresses) ---------------- */
@@ -181,7 +214,7 @@ export default function AddressAutocomplete({ onSelect, bias, placeholder }: { o
           }
         }
         if (!res) {
-          res = await photonSuggest(term, bias ?? null, ctrl.signal);
+          res = await osmSuggest(term, bias ?? null, ctrl.signal);
           setProvider('osm');
         }
         setItems(res);
@@ -230,7 +263,29 @@ export default function AddressAutocomplete({ onSelect, bias, placeholder }: { o
           value={q}
           onChange={(e) => setQ(e.target.value)}
           onFocus={() => items.length && setOpen(true)}
-          onKeyDown={(e) => {
+          onKeyDown={async (e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              if (open && items.length > 0 && active >= 0) {
+                choose(items[active]);
+              } else if (open && items.length > 0) {
+                choose(items[0]);
+              } else if (q.trim().length >= 3) {
+                setBusy(true);
+                try {
+                  const place = await geocodeText(q.trim());
+                  if (place) {
+                    skipNext.current = true;
+                    setQ(place.displayName);
+                    onSelect(place);
+                    setOpen(false);
+                  }
+                } finally {
+                  setBusy(false);
+                }
+              }
+              return;
+            }
             if (!open || !items.length) return;
             if (e.key === 'ArrowDown') {
               e.preventDefault();
@@ -238,9 +293,6 @@ export default function AddressAutocomplete({ onSelect, bias, placeholder }: { o
             } else if (e.key === 'ArrowUp') {
               e.preventDefault();
               setActive((a) => Math.max(0, a - 1));
-            } else if (e.key === 'Enter') {
-              e.preventDefault();
-              choose(items[Math.max(0, active)]);
             } else if (e.key === 'Escape') setOpen(false);
           }}
           placeholder={placeholder ?? 'Start typing an address, locality or landmark…'}
