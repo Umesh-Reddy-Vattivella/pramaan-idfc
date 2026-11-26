@@ -11,6 +11,13 @@ import { runPrice, type PriceResult } from './price';
 import { runValuation, type ValuationOptions, type ValuationResult } from './valuation';
 import { runAutoQc, type AutoQcResult } from './autoQc';
 import { routeCase, type RoutingInput, type RoutingResult } from './routing';
+import { surveyMismatch } from './autoQc';
+import { checkCaptureLocation, type GeofenceResult } from './geofence';
+import { roomsVsPlan } from './measure';
+import { runSanity, type SanityResult } from './sanity';
+import { parcelGeometry } from '@/lib/mapGeometry';
+import { effectiveDocuments } from '@/lib/data/losRecords';
+import { DEMOLITION_NOTICES, GOV_SOURCE } from '@/lib/data/govRecords';
 
 export interface EvaluateOptions extends MeasureOptions, ValuationOptions {
   /** Rolling 90-day hindsight-audit median error % in the locality (Drift Guard). */
@@ -28,6 +35,10 @@ export interface EvidencePack {
   valuation: ValuationResult;
   autoQc: AutoQcResult;
   routing: RoutingResult;
+  /** Technical sanity / remarks (mortgageability) — separate from the valuation route. */
+  sanity: SanityResult;
+  /** Geo-fence result for the customer-link photos (null when no link capture yet). */
+  geofence: GeofenceResult | null;
   hindsightAuditFlag: boolean;
 }
 
@@ -41,6 +52,7 @@ export function buildRoutingInput(
   valuation: ValuationResult,
   autoQc: AutoQcResult,
   landPortalOffline?: boolean,
+  sanity?: SanityResult,
 ): RoutingInput {
   const otherGisHazards = measure.activeHazards.filter((h) => h !== 'in_road_widening' && h !== 'in_forest_buffer');
 
@@ -69,7 +81,28 @@ export function buildRoutingInput(
     isTypicalProperty: c.isTypicalProperty,
     belowCircleRateFlag: price.belowCircleRateFlag,
     landPortalOffline,
+    sanityBlockerCount: sanity?.counts.BLOCKER ?? 0,
   };
+}
+
+/** Sanity layer: geo-fence of the customer-link photos + room measurements + documents + gov records. */
+export function evaluateSanity(c: PropertyCase, measure: MeasureResult, usage: UsageResult, now = new Date()): { sanity: SanityResult; geofence: GeofenceResult | null } {
+  const sub = c.customerLink?.submission;
+  const geofence = sub ? checkCaptureLocation(sub.photos, { lat: c.lat, lng: c.lng }, parcelGeometry(c).parcel) : null;
+  const rooms = sub && sub.rooms.length ? roomsVsPlan(sub.rooms, c.floors) : null;
+  const sanity = runSanity({
+    c,
+    measure,
+    usage,
+    survey: surveyMismatch(c),
+    documents: effectiveDocuments(c),
+    geofence,
+    rooms,
+    notices: DEMOLITION_NOTICES,
+    currentYear: now.getFullYear(),
+    sources: GOV_SOURCE,
+  });
+  return { sanity, geofence };
 }
 
 export function evaluateCase(c: PropertyCase, opts: EvaluateOptions = {}): EvidencePack {
@@ -79,8 +112,9 @@ export function evaluateCase(c: PropertyCase, opts: EvaluateOptions = {}): Evide
   const price = runPrice(c, { localityAuditMedianErrorPct: opts.localityAuditMedianErrorPct });
   const valuation = runValuation(c, measure, price, usage, opts);
   const autoQc = runAutoQc(c, measure, valuation);
+  const { sanity, geofence } = evaluateSanity(c, measure, usage);
 
-  const routing = routeCase(buildRoutingInput(c, trust, measure, usage, price, valuation, autoQc, opts.landPortalOffline));
+  const routing = routeCase(buildRoutingInput(c, trust, measure, usage, price, valuation, autoQc, opts.landPortalOffline, sanity));
 
   return {
     caseId: c.id,
@@ -91,6 +125,8 @@ export function evaluateCase(c: PropertyCase, opts: EvaluateOptions = {}): Evide
     valuation,
     autoQc,
     routing,
+    sanity,
+    geofence,
     hindsightAuditFlag: hindsightAuditSampled(c.id, routing.tier === 'INSTANT', opts.hindsightSamplingRate),
   };
 }

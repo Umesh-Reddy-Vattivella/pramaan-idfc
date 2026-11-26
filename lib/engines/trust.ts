@@ -8,7 +8,6 @@ export type TrustCheckId =
   | 'GPS_IN_PARCEL'
   | 'LIVE_CAMERA_DEVICE_ATTESTATION'
   | 'IMAGE_FORENSICS_SUN_ANGLE'
-  | 'IDENTITY_FACE_MATCH'
   | 'FLOOR_COVERAGE_LOCK';
 
 export interface TrustCheckResult {
@@ -71,11 +70,11 @@ export function evaluateTrust(c: PropertyCase): TrustResult {
   const checks: TrustCheckResult[] = [
     {
       id: 'GPS_IN_PARCEL',
-      label: 'GPS-in-Parcel Polygon',
+      label: 'Captured at the Pledged Property (Geo-fence)',
       passed: t.gpsInParcel,
       detail: t.gpsInParcel
-        ? 'Capture coordinates inside parcel polygon / within 25 m of cadastral centroid.'
-        : 'Capture coordinates outside parcel polygon (>25 m from centroid).',
+        ? 'Photo GPS inside the pledged parcel polygon / within 25 m of the LOS property pin. (Who captured is not checked — KYC was done at onboarding.)'
+        : 'Photo GPS outside the pledged parcel (> 25 m from the LOS property pin).',
     },
     {
       id: 'LIVE_CAMERA_DEVICE_ATTESTATION',
@@ -93,12 +92,6 @@ export function evaluateTrust(c: PropertyCase): TrustResult {
       detail: t.sunAngleMatched
         ? 'Shadow direction consistent with solar azimuth for GPS + timestamp.'
         : 'Shadow direction inconsistent with solar azimuth — possible edited/replayed media.',
-    },
-    {
-      id: 'IDENTITY_FACE_MATCH',
-      label: 'Identity & Representative Verification',
-      passed: t.faceMatched,
-      detail: t.faceMatched ? 'Face matched against KYC selfie / registered representative.' : 'Face match failed.',
     },
     {
       id: 'FLOOR_COVERAGE_LOCK',

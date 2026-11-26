@@ -21,6 +21,8 @@ interface NavItem {
 
 export default function TopNav() {
   const pathname = usePathname() ?? "/";
+  // The customer link (/c/:token) is a customer-facing page — no bank navigation.
+  const customerView = pathname.startsWith("/c/");
 
   // Case-scoped tabs (Workbench / Report) resolve from the current case id.
   const caseMatch = pathname.match(/^\/cases\/([^/]+)/);
@@ -29,7 +31,7 @@ export default function TopNav() {
 
   const items: NavItem[] = [
     { label: "Portfolio Command Center", href: "/", icon: LayoutDashboard, active: pathname === "/" },
-    { label: "Owner Self-Capture", href: "/capture", icon: Smartphone, active: pathname.startsWith("/capture") },
+    { label: "Valuation Links", href: "/capture", icon: Smartphone, active: pathname.startsWith("/capture") },
     { label: "Value New Property", href: "/value", icon: Globe, active: pathname.startsWith("/value") },
     {
       label: "Underwriter Workbench",
@@ -44,6 +46,8 @@ export default function TopNav() {
       active: onReport,
     },
   ];
+
+  if (customerView) return null;
 
   return (
     <header className="sticky top-0 z-[1000] bg-maroon text-white shadow-md">

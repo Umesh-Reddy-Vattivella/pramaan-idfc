@@ -8,6 +8,7 @@ import type { EvidencePack } from '@/lib/engines/evaluateCase';
 import { formatInr, formatInrShort } from '@/lib/engines/valuation';
 import { RouteBadge } from '@/components/StatusBadges';
 import { Ev } from '@/components/EvidenceDrawer';
+import { SanityVerdictBadge } from '@/components/workbench/SanityTab';
 
 export default function DecisionHeader({ c, e }: { c: PropertyCase; e: EvidencePack }) {
   const [open, setOpen] = useState(false);
@@ -64,6 +65,13 @@ export default function DecisionHeader({ c, e }: { c: PropertyCase; e: EvidenceP
           </span>
           <span className="text-[11px] text-slate-500">SLA {r.sla}</span>
         </button>
+
+        <div className="flex flex-col items-start gap-0.5" title="Technical sanity / mortgageability (separate from the valuation route)">
+          <SanityVerdictBadge verdict={e.sanity.verdict} />
+          <span className="text-[11px] text-slate-500">
+            {e.sanity.counts.BLOCKER + e.sanity.counts.FAIL} remark(s) to clear · {e.sanity.counts.WARN} condition(s)
+          </span>
+        </div>
 
         <Link
           href={`/cases/${encodeURIComponent(c.id)}/report`}

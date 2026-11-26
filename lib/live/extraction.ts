@@ -284,7 +284,7 @@ export function extractionToCase(ex: ExtractedReport, meta: { id: string; mode: 
     recordConfirmedUsage: usage,
     utilitySummary: ex.utilitySummary ?? 'As stated in uploaded report',
     // No PRAMAAN live capture exists for an uploaded report → Trust Layer is NOT passed (conservative).
-    trustChecks: { gpsInParcel: false, liveCameraOnly: false, deviceAttested: false, sunAngleMatched: false, faceMatched: false, floorCoverageLocked: false },
+    trustChecks: { gpsInParcel: false, liveCameraOnly: false, deviceAttested: false, sunAngleMatched: false, floorCoverageLocked: false },
 
     legacyStatedLandRate: rate,
     legacyStatedValueWords: ex.statedValueWords,

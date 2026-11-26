@@ -48,7 +48,7 @@ export interface DocDef {
   fields: { owner?: string; areaSqft?: number; surveyNo?: string; other?: string };
 }
 
-export const CAPTURE_OWNER = 'Self-Capture Owner (KYC verified)';
+export const CAPTURE_OWNER = 'Self-Capture Owner';
 export const CAPTURE_SURVEY = 'Khasra 112/2';
 
 export const DOC_DEFS: DocDef[] = [
@@ -99,7 +99,6 @@ export interface CaptureDraft {
   liveCameraOnly: boolean;
   deviceAttested: boolean;
   sunAngleMatched: boolean;
-  faceMatched: boolean;
   floorsWalked: number;
   docs: DocId[];
   startedAt: number;
@@ -175,7 +174,6 @@ export function buildCaptureCase(d: CaptureDraft): PropertyCase {
       liveCameraOnly: d.liveCameraOnly,
       deviceAttested: d.deviceAttested,
       sunAngleMatched: d.sunAngleMatched,
-      faceMatched: d.faceMatched,
       floorCoverageLocked: d.floorsWalked >= CAPTURE_SITE.exteriorFloors,
     },
     surveyDeedNumbers: [CAPTURE_SURVEY.replace('Khasra ', '')],
@@ -190,7 +188,7 @@ export function buildCaptureCase(d: CaptureDraft): PropertyCase {
       { label: 'Property', value: 'Self-Occupied Residential RCC, G+2' },
       { label: 'Location', value: `${CAPTURE_SITE.locality}, ${CAPTURE_SITE.city} (demo self-capture template)` },
       { label: 'Documents', value: DOC_DEFS.filter((x) => d.docs.includes(x.id)).map((x) => x.label).join(', ') },
-      { label: 'KYC', value: '[Aadhaar OTP Verified] · [PAN Verified] · Selfie face match' },
+      { label: 'KYC', value: 'Completed once at loan onboarding (not repeated in the technical journey)' },
     ],
   };
 }

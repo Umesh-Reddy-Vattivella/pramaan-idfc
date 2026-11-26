@@ -22,6 +22,7 @@ import { aggregateLiveEvidence, distanceKm, pointRate } from '@/lib/engines/mark
 import { evaluateCase } from '@/lib/engines/evaluateCase';
 import { formatIndianNumber, formatInr, formatInrShort } from '@/lib/engines/valuation';
 import { SPATIAL_TIER_LABEL } from '@/lib/engines/price';
+import { residualLife, STRUCTURE_LABEL, type StructureType } from '@/lib/engines/valuation';
 import { USAGE_LABEL } from '@/lib/engines/usage';
 import { buildNewPropertyCase, EMPTY_FORM, snapshotMode, type NewPropertyForm } from '@/lib/data/newPropertyCase';
 import { PinMap } from '@/components/workbench/maps';
@@ -282,20 +283,30 @@ export default function ValueNewPropertyPage() {
               </Field>
               <NumField label="Plot area — deed (sqft)" ai={badge('deedPlotAreaSqft')} value={f.deedPlotAreaSqft} onChange={(v) => set('deedPlotAreaSqft', v ?? 0)} />
               <NumField label="Plot area — land record (sqft, optional)" ai={badge('recordPlotAreaSqft')} value={f.recordPlotAreaSqft} onChange={(v) => set('recordPlotAreaSqft', v)} />
-              <NumField label="Road-widening loss (sqft)" value={f.roadWideningLossSqft} onChange={(v) => set('roadWideningLossSqft', v ?? 0)} />
               <NumField label="Approach road (ft)" ai={badge('roadWidthFt')} value={f.roadWidthFt} onChange={(v) => set('roadWidthFt', v ?? 0)} />
               <NumField label="Age (years)" ai={badge('ageYears')} value={f.ageYears} onChange={(v) => set('ageYears', v ?? 0)} />
-              <NumField label="Residual life (years)" ai={badge('residualLifeYears')} value={f.residualLifeYears} onChange={(v) => set('residualLifeYears', v ?? 0)} />
+              <Field label="Structure type">
+                <select value={f.structure} onChange={(e) => set('structure', e.target.value as StructureType)} className="input">
+                  {(Object.keys(STRUCTURE_LABEL) as StructureType[]).map((k) => (
+                    <option key={k} value={k}>{STRUCTURE_LABEL[k]}</option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Residual life (computed)">
+                <div className="input bg-canvas text-slate-700" title={residualLife(f.structure, f.ageYears).formula}>
+                  {residualLife(f.structure, f.ageYears).residualLifeYears} yrs
+                </div>
+              </Field>
               <NumField label="Construction rate, as-valued (Rs./sqft)" value={f.constructionRatePerSqft} onChange={(v) => set('constructionRatePerSqft', v ?? 0)} />
-              <NumField label="Amenities (Rs.)" value={f.amenitiesValueInr} onChange={(v) => set('amenitiesValueInr', v ?? 0)} />
+              {(f.usage === 'RESIDENTIAL' || f.usage === 'MIXED_USE') && (
+                <NumField label="Amenities (Rs., residential only)" value={f.amenitiesValueInr} onChange={(v) => set('amenitiesValueInr', v ?? 0)} />
+              )}
               <Field label="FSV ratio">
                 <select value={f.fsvRatio} onChange={(e) => set('fsvRatio', Number(e.target.value))} className="input">
                   <option value={0.8}>80%</option>
                   <option value={0.85}>85%</option>
                 </select>
               </Field>
-              <NumField label="Requested loan (Rs., optional)" value={f.requestedLoanInr} onChange={(v) => set('requestedLoanInr', v)} />
-              <NumField label="Monthly rent (Rs., if leased)" value={f.monthlyRentInr} onChange={(v) => set('monthlyRentInr', v)} />
               <Field label="Survey / khasra nos. — sale deed" ai={badge('surveyDeed')}>
                 <input value={f.surveyDeed} onChange={(e) => set('surveyDeed', e.target.value)} placeholder="e.g. 112/2" className="input" />
               </Field>
@@ -310,22 +321,19 @@ export default function ValueNewPropertyPage() {
               </p>
             )}
 
+            <p className="mt-2 text-[11px] text-slate-500">Residual life: {residualLife(f.structure, f.ageYears).formula}. Road widening comes from the DP / Master Plan layer, not a manual entry.</p>
             <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-xs">
               <span className="flex items-center gap-1.5">
-                <Check label="Sanctioned plan available" checked={f.hasSanctionedPlan} onChange={(v) => set('hasSanctionedPlan', v)} />
+                <Check label="Approved building plan on file (mandatory)" checked={f.hasSanctionedPlan} onChange={(v) => set('hasSanctionedPlan', v)} />
                 {badge('hasSanctionedPlan') && <AiPill ai={badge('hasSanctionedPlan')!} />}
               </span>
-              {!f.hasSanctionedPlan && (
-                <label className="flex items-center gap-1.5">
-                  No-plan policy:
-                  <select value={f.noPlanPolicy} onChange={(e) => set('noPlanPolicy', e.target.value as NewPropertyForm['noPlanPolicy'])} className="rounded border border-slate-300 px-1 py-0.5">
-                    <option value="LAND_ONLY">Land only</option>
-                    <option value="INSTITUTIONAL_EXCEPTION">Exception (value BUA)</option>
-                  </select>
-                </label>
-              )}
-              <Check label="Irregular / non-standard property" checked={!f.isTypicalProperty} onChange={(v) => set('isTypicalProperty', !v)} />
             </div>
+            {!f.hasSanctionedPlan && (
+              <p className="mt-2 flex items-start gap-1.5 rounded-lg bg-critical-bg/60 px-3 py-2 text-xs text-critical">
+                <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                Approved plan missing → the property is NOT MORTGAGEABLE until the plan (or a regularisation certificate) is obtained. Land-only value is shown for reference only; a customer measurement cannot replace the approved plan.
+              </p>
+            )}
 
             <div className="mt-3">
               <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -360,13 +368,10 @@ export default function ValueNewPropertyPage() {
               </button>
             </div>
 
-            <label className="mt-3 flex items-start gap-2 rounded-lg border border-dashed border-slate-300 p-2.5 text-xs">
-              <input type="checkbox" checked={f.captureCompleted} onChange={(e) => set('captureCompleted', e.target.checked)} className="mt-0.5 accent-[#9C1D26]" />
-              <span>
-                <span className="font-semibold text-ink">Owner self-capture completed (demo simulation)</span>
-                <span className="block text-slate-500">Marks all Trust Layer checks as passed. Leave unticked to show the conservative route until the owner completes capture.</span>
-              </span>
-            </label>
+            <p className="mt-3 rounded-lg border border-dashed border-slate-300 p-2.5 text-xs text-slate-600">
+              After creating the case, send the <span className="font-semibold text-ink">customer valuation link</span> from the workbench (① Identify). Geo-tagged photos and room measurements
+              from the link complete the Trust Layer and the Technical Sanity Report.
+            </p>
           </Card>
         </div>
 

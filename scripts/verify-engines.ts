@@ -31,7 +31,13 @@ import { buildNewPropertyCase, EMPTY_FORM } from '../lib/data/newPropertyCase';
 import { ageFromYear, classifyDocType, detectLanguage, parseRoadWidthFt, parseYear, patternFacts, usageFromText } from '../lib/engines/docFacts';
 import { normaliseDigits } from '../lib/engines/marketEvidence';
 import { autofillFromFacts } from '../lib/data/docAutofill';
-import type { MarketDataPoint } from '../lib/types';
+import type { GeoPhoto, MarketDataPoint } from '../lib/types';
+import { checkCaptureLocation } from '../lib/engines/geofence';
+import { knownObjectLengthFt, REFERENCE_OBJECTS, roomsVsPlan } from '../lib/engines/measure';
+import { residualLife } from '../lib/engines/valuation';
+import { parcelGeometry } from '../lib/mapGeometry';
+import { applySubmission, buildPrefill, decodePrefill, encodePrefill } from '../lib/data/customerLink';
+import { buildDemoApplication } from '../lib/data/demoApplication';
 
 let pass = 0;
 let fail = 0;
@@ -113,7 +119,7 @@ check('Thin comps + District → Physical', runStressTest(sc, c1, { ...b, compsC
 console.log('\n§7.1-5  Owner capture: success + fraud blocks');
 const draft = {
   caseId: 'self-capture-verify', channel: 'OWNER_APP' as const, capturePoint: { lat: CAPTURE_SITE.lat, lng: CAPTURE_SITE.lng },
-  gpsInParcel: true, liveCameraOnly: true, deviceAttested: true, sunAngleMatched: true, faceMatched: true, floorsWalked: 3,
+  gpsInParcel: true, liveCameraOnly: true, deviceAttested: true, sunAngleMatched: true, floorsWalked: 3,
   docs: ['SALE_DEED', 'SANCTIONED_PLAN', 'EB_BILL', 'PROPERTY_TAX'] as ('SALE_DEED' | 'SANCTIONED_PLAN' | 'EB_BILL' | 'PROPERTY_TAX')[], startedAt: 0, finishedAt: 300000,
 };
 check('Clean capture → INSTANT', evaluateCase(buildCaptureCase(draft)).routing.tier, 'INSTANT');
@@ -262,6 +268,67 @@ console.log('\nDocument OCR autofill (deterministic parts)');
   truthy('Autofill: survey mismatch flagged', af.conflicts.some((c) => c.includes('Survey numbers differ')));
   check('Autofill: area within 1% → no area conflict', af.conflicts.some((c) => c.includes('Plot area differs')), false);
   check('Autofill: provenance keeps verbatim quote', af.prov.recordPlotAreaSqft?.quote, '167.0 sq. m');
+}
+
+console.log('\nMentor review: Technical Sanity engine (remarks pre-empted on Day 0)');
+const sStat = (e: ReturnType<typeof evaluateCase>, id: string) => e.sanity.checks.find((x) => x.id === id)!.status;
+check('C1 sanity verdict', c1.sanity.verdict, 'TECHNICALLY_CLEAR');
+check('R1 no approved plan → BLOCKER', sStat(r1, 'S7'), 'BLOCKER');
+check('R1 verdict', r1.sanity.verdict, 'NOT_MORTGAGEABLE');
+check('R1 FSI 14.96% → compoundable WARN', sStat(r1, 'S5'), 'WARN');
+check('R1 road widening flagged', sStat(r1, 'S10'), 'WARN');
+check('R2 FSI 52.68% → FAIL', sStat(r2, 'S5'), 'FAIL');
+check('R2 plan 74 m off site → FAIL', sStat(r2, 'S8'), 'FAIL');
+check('R2 unapproved 5th floor + tin shed → FAIL', sStat(r2, 'S9'), 'FAIL');
+check('R3 survey mismatch → FAIL', sStat(r3, 'S2'), 'FAIL');
+check('R3 no approved plan → BLOCKER', sStat(r3, 'S7'), 'BLOCKER');
+check('Routes unchanged by sanity layer (R1)', r1.routing.tier, 'REMOTE_REVIEW');
+truthy('Sanity blocker adds a Remote trigger (R3)', r3.routing.remoteTriggers.some((t) => t.includes('technical-sanity blocker')));
+
+console.log('\nMentor review: geo-fence replaces KYC');
+{
+  const base = byLabel('C1');
+  const parcel = parcelGeometry(base).parcel;
+  const shot = (slot: string, northM: number, ageMs = 1000): GeoPhoto => ({
+    id: slot, slot, label: slot, lat: base.lat + northM / 111320, lng: base.lng, accuracyM: 8, takenAt: '2026-11-26T10:00:00Z', fileAgeMs: ageMs, hash: 'x',
+  });
+  const atSite = ['FRONT', 'ROAD', 'LEFT', 'RIGHT'].map((s) => shot(s, 3));
+  check('4 photos at the property → PASS', checkCaptureLocation(atSite, base, parcel).status, 'PASS');
+  check('Photo from residence 50 km away → FAIL', checkCaptureLocation([...atSite, shot('REAR', 50000)], base, parcel).status, 'FAIL');
+  check('Photo 60 m away → WARN (re-shoot)', checkCaptureLocation([...atSite, shot('REAR', 60)], base, parcel).status, 'WARN');
+  check('Gallery image (1 day old) → FAIL', checkCaptureLocation([...atSite.slice(1), shot('FRONT', 3, 86400000)], base, parcel).status, 'FAIL');
+  check('Only 3 exterior photos → WARN', checkCaptureLocation(atSite.slice(0, 3), base, parcel).status, 'WARN');
+
+  const demo = buildDemoApplication('los-verify', {
+    borrowerName: 'V', address: 'A', city: 'Nagpur', state: 'Maharashtra', lat: 21.15, lng: 79.08, usage: 'RESIDENTIAL', plotAreaSqft: 1500,
+    floorCount: 2, approvedSqftPerFloor: 1000, builtSqftPerFloor: 1000, hasApprovedPlan: true, ageYears: 8, structure: 'RCC_FRAMED',
+  });
+  const p = buildPrefill(demo, 'tok12345abcd');
+  check('Prefill round-trips through the URL fragment', decodePrefill(encodePrefill(p))?.propertyAddress, p.propertyAddress);
+  check('Demo application before capture: not Instant', evaluateCase(demo).routing.tier !== 'INSTANT', true);
+  const dshot = (slot: string, northM: number): GeoPhoto => ({ ...shot(slot, 0), lat: demo.lat + northM / 111320, lng: demo.lng });
+  const sub = {
+    submittedAt: '2026-11-26T10:00:00Z', capturedBy: 'FAMILY' as const, documents: p.documents,
+    photos: [...['FRONT', 'ROAD', 'LEFT', 'RIGHT'].map((s) => dshot(s, 2)), dshot('INTERIOR:Ground Floor', 1), dshot('INTERIOR:First Floor', 1)],
+    rooms: [{ id: 'r1', name: 'Hall', floorName: 'Ground Floor', lengthFt: 20, widthFt: 15, method: 'TAPE' as const }],
+  };
+  const link = { token: 'tok12345abcd', url: 'x', sentAt: '2026-11-26T09:00:00Z', status: 'SENT' as const };
+  const done = { ...demo, ...applySubmission(demo, link, sub) };
+  const de = evaluateCase(done);
+  check('Capture by family member at site → geo-fence PASS', de.geofence?.status, 'PASS');
+  check('Both floors evidenced → coverage locked', done.trustChecks.floorCoverageLocked, true);
+  check('Rooms within approved area → S6 PASS', sStat(de, 'S6'), 'PASS');
+  const away = { ...demo, ...applySubmission(demo, link, { ...sub, photos: sub.photos.map((x) => ({ ...x, lat: x.lat + 0.45 })) }) };
+  check('Same capture 50 km away → S1 FAIL', sStat(evaluateCase(away), 'S1'), 'FAIL');
+}
+
+console.log('\nMentor review: measurement & residual life');
+check('Residual life RCC, age 8 → 52', residualLife('RCC_FRAMED', 8).residualLifeYears, 52);
+check('Residual life load-bearing, age 14 → 36', residualLife('LOAD_BEARING', 14).residualLifeYears, 36);
+check('A4 reference scaling (400 px wall / 40 px A4)', knownObjectLengthFt(400, 40, REFERENCE_OBJECTS.A4_LONG.ft).toFixed(2), '9.74');
+{
+  const rv = roomsVsPlan([{ floorName: 'GF', lengthFt: 30, widthFt: 40 }], [{ floorName: 'GF', sanctionedSqft: 1000, actualSqft: 1000 }]);
+  check('Rooms 1,200 carpet → 1,440 BUA vs 1,000 approved → exceeds', rv.anyExceeds, true);
 }
 
 console.log('\n§7.1-6  PDF export builds for every case');

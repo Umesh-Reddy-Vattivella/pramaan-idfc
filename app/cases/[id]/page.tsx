@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useMemo, useState } from 'react';
-import { ArrowLeft, ClipboardCheck, IndianRupee, Ruler, ScanEye } from 'lucide-react';
+import { ArrowLeft, ClipboardCheck, Fingerprint, IndianRupee, ListChecks, Ruler, ScanEye } from 'lucide-react';
 import { useCases } from '@/lib/state/CasesContext';
 import { buildEvidence } from '@/lib/evidence';
 import { EvidenceProvider } from '@/components/EvidenceDrawer';
@@ -12,9 +12,11 @@ import MeasureTab from '@/components/workbench/MeasureTab';
 import UsageTrustTab from '@/components/workbench/UsageTrustTab';
 import PriceTriangulationPanel from '@/components/PriceTriangulationPanel';
 import AutoQcPanel from '@/components/AutoQcPanel';
+import SanityTab from '@/components/workbench/SanityTab';
+import IdentifyTab, { CustomerRoomsSection } from '@/components/workbench/IdentifyTab';
 import { worstQcStatus } from '@/components/StatusBadges';
 
-type TabId = 'measure' | 'price' | 'usage' | 'qc';
+type TabId = 'sanity' | 'identify' | 'measure' | 'price' | 'usage' | 'qc';
 
 export default function WorkbenchPage() {
   const params = useParams<{ id: string }>();
@@ -22,7 +24,7 @@ export default function WorkbenchPage() {
   const { getCase, getEvaluation, hydrated } = useCases();
   const c = getCase(id);
   const e = getEvaluation(id);
-  const [tab, setTab] = useState<TabId>('measure');
+  const [tab, setTab] = useState<TabId>('sanity');
   const evidence = useMemo(() => (c && e ? buildEvidence(c, e) : {}), [c, e]);
 
   if (!c || !e) {
@@ -39,11 +41,27 @@ export default function WorkbenchPage() {
   const qcWorst = worstQcStatus(e.autoQc.findings);
   const qcIssues = e.autoQc.findings.filter((f) => f.status !== 'PASS').length;
 
+  const sc = e.sanity.counts;
+  const link = c.customerLink;
   const tabs: { id: TabId; label: string; sub: string; icon: typeof Ruler; flag?: string }[] = [
-    { id: 'measure', label: 'A · Engine 1 — Measure & GIS', sub: 'Area, BUA, satellite, boundaries', icon: Ruler },
-    { id: 'price', label: 'B · Engine 2 — Price & Authenticity', sub: `S = ${e.price.authenticity.score}/100`, icon: IndianRupee },
-    { id: 'usage', label: 'C · Engine 3 — Usage & Trust', sub: e.trust.allPassed ? 'Trust 100% PASS' : 'Trust FAILED', icon: ScanEye, flag: e.trust.allPassed && !e.usage.usageConflict ? undefined : 'critical' },
-    { id: 'qc', label: 'D · Auto-QC & Legacy Audit', sub: qcIssues ? `${qcIssues} issue${qcIssues > 1 ? 's' : ''} flagged` : '6/6 PASS', icon: ClipboardCheck, flag: qcWorst === 'PASS' ? undefined : qcWorst === 'WARN' ? 'remote' : 'critical' },
+    {
+      id: 'sanity',
+      label: 'Technical Sanity Report',
+      sub: e.sanity.verdictLabel,
+      icon: ListChecks,
+      flag: sc.BLOCKER || sc.FAIL ? 'critical' : sc.WARN ? 'remote' : undefined,
+    },
+    {
+      id: 'identify',
+      label: '① Identify',
+      sub: link ? (link.status === 'SUBMITTED' ? `Capture received · ${e.geofence?.status === 'PASS' ? 'geo-fence PASS' : 'geo-fence ' + (e.geofence?.status ?? '—')}` : `Link ${link.status.toLowerCase()}`) : 'Docs · send customer link',
+      icon: Fingerprint,
+      flag: e.geofence && e.geofence.status !== 'PASS' ? (e.geofence.status === 'WARN' ? 'remote' : 'critical') : undefined,
+    },
+    { id: 'measure', label: '② Measure', sub: 'Area, BUA vs plan, rooms, GIS', icon: Ruler },
+    { id: 'price', label: '③ Value', sub: `Comparables · S = ${e.price.authenticity.score}/100`, icon: IndianRupee },
+    { id: 'usage', label: 'Usage & Trust', sub: e.trust.allPassed ? 'Trust 100% PASS' : 'Trust not passed', icon: ScanEye, flag: e.trust.allPassed && !e.usage.usageConflict ? undefined : 'critical' },
+    { id: 'qc', label: 'Auto-QC & Legacy Audit', sub: qcIssues ? `${qcIssues} issue${qcIssues > 1 ? 's' : ''} flagged` : '6/6 PASS', icon: ClipboardCheck, flag: qcWorst === 'PASS' ? undefined : qcWorst === 'WARN' ? 'remote' : 'critical' },
   ];
 
   return (
@@ -72,7 +90,7 @@ export default function WorkbenchPage() {
           </details>
         )}
 
-        <div role="tablist" aria-label="Workbench engines" className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+        <div role="tablist" aria-label="Workbench engines" className="grid gap-2 sm:grid-cols-3 xl:grid-cols-6">
           {tabs.map((t) => {
             const active = tab === t.id;
             const Icon = t.icon;
@@ -100,7 +118,14 @@ export default function WorkbenchPage() {
         </div>
 
         <div role="tabpanel" key={`${c.id}-${tab}`}>
-          {tab === 'measure' && <MeasureTab c={c} e={e} />}
+          {tab === 'sanity' && <SanityTab c={c} e={e} />}
+          {tab === 'identify' && <IdentifyTab c={c} e={e} />}
+          {tab === 'measure' && (
+            <div className="space-y-5">
+              <CustomerRoomsSection c={c} />
+              <MeasureTab c={c} e={e} />
+            </div>
+          )}
           {tab === 'price' && <PriceTriangulationPanel c={c} e={e} />}
           {tab === 'usage' && <UsageTrustTab c={c} e={e} />}
           {tab === 'qc' && <AutoQcPanel c={c} e={e} />}

@@ -118,7 +118,7 @@ const case1: PropertyCase = {
     { label: 'Bedroom Furniture', confidencePct: 97, frame: 'Interior — FF bedroom', usage: 'RESIDENTIAL' },
     { label: 'Domestic Facade', confidencePct: 96, frame: 'Exterior — front elevation', usage: 'RESIDENTIAL' },
   ],
-  trustChecks: { gpsInParcel: true, liveCameraOnly: true, deviceAttested: true, sunAngleMatched: true, faceMatched: true, floorCoverageLocked: true },
+  trustChecks: { gpsInParcel: true, liveCameraOnly: true, deviceAttested: true, sunAngleMatched: true, floorCoverageLocked: true },
 
   esignStatus: 'PENDING',
   details: [
@@ -126,7 +126,7 @@ const case1: PropertyCase = {
     { label: 'Jurisdiction', value: 'Within NMC Municipal Limits | Residential Zone' },
     { label: 'Approach Road', value: '30 ft paved approach road | 0 m road widening | 0 GIS hazards' },
     { label: 'Documents', value: 'Sale Deed, NMC Sanctioned Plan, Property Tax Receipt, Domestic MSEDCL EB Bill — verified via DigiLocker / OCR' },
-    { label: 'Status', value: 'All 6 Trust Layer checks PASS | All 6 Auto-QC rules PASS | Ready for 1-click Phase 1 Remote Valuer e-Sign' },
+    { label: 'Status', value: 'All Trust Layer checks PASS | All 6 Auto-QC rules PASS | Ready for 1-click Phase 1 Remote Valuer e-Sign' },
   ],
 };
 
@@ -223,7 +223,7 @@ const case2: PropertyCase = {
     { label: 'GF Stilt Parking', confidencePct: 95, frame: 'Exterior — ground floor', usage: 'RESIDENTIAL' },
     { label: 'Mumty Stair Cabin', confidencePct: 92, frame: 'Exterior — roof level', usage: 'RESIDENTIAL' },
   ],
-  trustChecks: { gpsInParcel: true, liveCameraOnly: true, deviceAttested: true, sunAngleMatched: true, faceMatched: true, floorCoverageLocked: true },
+  trustChecks: { gpsInParcel: true, liveCameraOnly: true, deviceAttested: true, sunAngleMatched: true, floorCoverageLocked: true },
 
   legacyStatedLandRate: 9000,
   legacyVisitDate: '25/05/2026',
@@ -342,7 +342,7 @@ const case3: PropertyCase = {
     { label: 'Bank Branch Counters', confidencePct: 95, frame: 'Interior — ground floor', usage: 'COMMERCIAL' },
     { label: '5th Floor Tin Shed', confidencePct: 94, frame: 'Exterior — roof level', usage: 'COMMERCIAL' },
   ],
-  trustChecks: { gpsInParcel: true, liveCameraOnly: true, deviceAttested: true, sunAngleMatched: true, faceMatched: true, floorCoverageLocked: true },
+  trustChecks: { gpsInParcel: true, liveCameraOnly: true, deviceAttested: true, sunAngleMatched: true, floorCoverageLocked: true },
 
   legacyDemolitionRisk: 'Low',
   legacyVisitDate: '12/06/2026',
@@ -443,7 +443,7 @@ const case4: PropertyCase = {
     { label: 'EB Meter LA1A/DOMESTIC', confidencePct: 96, frame: 'Exterior — meter board', usage: 'RESIDENTIAL' },
     { label: 'Household Furniture', confidencePct: 95, frame: 'Interior — FF hall', usage: 'RESIDENTIAL' },
   ],
-  trustChecks: { gpsInParcel: true, liveCameraOnly: true, deviceAttested: true, sunAngleMatched: true, faceMatched: true, floorCoverageLocked: true },
+  trustChecks: { gpsInParcel: true, liveCameraOnly: true, deviceAttested: true, sunAngleMatched: true, floorCoverageLocked: true },
 
   legacyStatedMarketValueInr: 33975200,
   legacyStatedValueWords: 'Fifty Five Lakh Sixty Thousand and Twenty Rupees Only',

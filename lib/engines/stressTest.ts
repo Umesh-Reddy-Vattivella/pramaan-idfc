@@ -64,7 +64,7 @@ export function runStressTest(c: PropertyCase, e: EvidencePack, s: StressInputs)
   const spatialTypicality = spatialTypicalityScore(s.spatialTier, c.isTypicalProperty);
   const score = Math.round(agreement + depth + recency + spatialTypicality);
 
-  const input = buildRoutingInput(c, e.trust, e.measure, e.usage, e.price, e.valuation, e.autoQc);
+  const input = buildRoutingInput(c, e.trust, e.measure, e.usage, e.price, e.valuation, e.autoQc, undefined, e.sanity);
   const routing = routeCase({ ...input, authenticityScore: score });
 
   const ltvCapPct = e.usage.appliedLtvCap * 100;

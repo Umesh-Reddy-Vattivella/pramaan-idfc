@@ -142,6 +142,34 @@ export function depreciation(ageYears: number, residualLifeYears: number): { d: 
   return { d, totalLifeYears };
 }
 
+/* ---------------- Residual life (answers "how did you arrive at 55 years?") ---------------- */
+
+export type StructureType = 'RCC_FRAMED' | 'LOAD_BEARING' | 'STEEL_SHED';
+
+/** Total economic life by structure type (CPWD / valuer practice). */
+export const ECONOMIC_LIFE_YEARS: Record<StructureType, number> = {
+  RCC_FRAMED: 60,
+  LOAD_BEARING: 50,
+  STEEL_SHED: 30,
+};
+
+export const STRUCTURE_LABEL: Record<StructureType, string> = {
+  RCC_FRAMED: 'RCC framed',
+  LOAD_BEARING: 'Load-bearing masonry',
+  STEEL_SHED: 'Steel / tin shed (industrial)',
+};
+
+/** Residual life = Total economic life − Age (floored at 0). */
+export function residualLife(structure: StructureType, ageYears: number): { totalLifeYears: number; residualLifeYears: number; formula: string } {
+  const totalLifeYears = ECONOMIC_LIFE_YEARS[structure];
+  const residualLifeYears = Math.max(0, totalLifeYears - Math.max(0, ageYears));
+  return {
+    totalLifeYears,
+    residualLifeYears,
+    formula: `${STRUCTURE_LABEL[structure]} economic life ${totalLifeYears} yrs − age ${ageYears} yrs = ${residualLifeYears} yrs`,
+  };
+}
+
 /** Method 1 — Land + Building */
 export function landPlusBuilding(input: {
   aNet: number;

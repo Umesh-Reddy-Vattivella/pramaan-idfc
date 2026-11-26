@@ -11,6 +11,7 @@ import { USAGE_LABEL } from '@/lib/engines/usage';
 import { SOURCE_SHORT } from '@/lib/sourceMeta';
 import { QcStatusBadge, RouteBadge } from '@/components/StatusBadges';
 import RemoteESignModal from '@/components/RemoteESignModal';
+import { SanityStatusBadge, SanityVerdictBadge } from '@/components/workbench/SanityTab';
 
 const sqft = (n: number) => `${formatIndianNumber(Math.round(n * 100) / 100)} sqft`;
 const rate = (n: number) => `Rs. ${formatIndianNumber(Math.round(n))}/sqft`;
@@ -247,6 +248,30 @@ export default function ReportPage() {
                 </li>
               ))}
             </ol>
+          </Section>
+
+          <Section n={sec()} title="Technical Sanity Report (mortgageability)">
+            <div className="mb-2 flex items-center gap-2">
+              <SanityVerdictBadge verdict={e.sanity.verdict} />
+              <span className="text-xs text-slate-500">Separate from the valuation route — remarks to clear before sanction.</span>
+            </div>
+            <ol className="space-y-1.5">
+              {e.sanity.checks
+                .filter((x) => x.status !== 'PASS')
+                .map((x) => (
+                  <li key={x.id} className="rounded-lg border border-slate-200 p-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-ink">
+                        {x.id} · {x.title}
+                      </span>
+                      <SanityStatusBadge status={x.status} />
+                    </div>
+                    <p className="mt-0.5 text-sm text-ink">{x.finding}</p>
+                    {x.action !== 'None.' && <p className="mt-0.5 text-xs font-medium text-slate-700">Action: {x.action}</p>}
+                  </li>
+                ))}
+            </ol>
+            <p className="mt-2 text-xs text-slate-500">{e.sanity.counts.PASS} other check(s) clear.</p>
           </Section>
 
           <Section n={sec()} title="Annex — Price Evidence, Geo-Coordinates & Comparables">

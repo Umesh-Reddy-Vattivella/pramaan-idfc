@@ -44,6 +44,8 @@ export interface RoutingInput {
   belowCircleRateFlag: boolean;
   /** State land portal not on API → Ops Lookup Desk fallback. */
   landPortalOffline?: boolean;
+  /** Technical-sanity BLOCKERs (no approved plan, demolition notice, severe usage conflict). */
+  sanityBlockerCount?: number;
 }
 
 export interface GateResult {
@@ -123,7 +125,7 @@ export function routeCase(i: RoutingInput): RoutingResult {
   if (dev !== null && dev > PHYSICAL_BUA_DEV_PCT) physicalTriggers.push(`BUA deviation ${devText} > 30%.`);
   if (i.hasUnapprovedStructures) physicalTriggers.push('Unapproved floors / sheds detected.');
   if (!i.trustAllPassed || i.omissionFraudBlock) {
-    physicalTriggers.push(i.omissionFraudBlock ? 'Trust Layer failure: Omission Fraud floor mismatch.' : 'Trust Layer not passed (GPS / device / media / identity — or no PRAMAAN live capture).');
+    physicalTriggers.push(i.omissionFraudBlock ? 'Trust Layer failure: Omission Fraud floor mismatch.' : 'Trust Layer not passed (geo-fence / device / media — or no PRAMAAN live capture).');
   }
   if (i.severeUsageConflict) physicalTriggers.push('Severe usage conflict.');
   if (i.marketValueInr > HIGH_TICKET_MV_INR && isCommercialLike(i.appliedUsage) && dev !== null && dev > INSTANT_BUA_DEV_MAX_PCT) {
@@ -151,6 +153,7 @@ export function routeCase(i: RoutingInput): RoutingResult {
   if (i.criticalQcFailCount > 0) remoteTriggers.push(`${i.criticalQcFailCount} critical Auto-QC fail(s).`);
   if (i.belowCircleRateFlag) remoteTriggers.push('Consensus rate below circle rate (floor sanity check).');
   if (i.landPortalOffline) remoteTriggers.push('State land portal not on API — Ops Lookup Desk fallback.');
+  if (i.sanityBlockerCount) remoteTriggers.push(`${i.sanityBlockerCount} technical-sanity blocker(s) — property not mortgageable until cleared.`);
 
   const allInstantPass = instantGates.every((g) => g.passed);
   const tier: RouteTier = physicalTriggers.length

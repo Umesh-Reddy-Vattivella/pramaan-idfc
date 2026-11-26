@@ -1,6 +1,6 @@
 'use client';
 
-import { Camera, CheckCircle2, Fingerprint, Layers, MapPin, ScanFace, ShieldAlert, Smartphone, Sun, XCircle, type LucideIcon } from 'lucide-react';
+import { Camera, CheckCircle2, Fingerprint, Layers, MapPin, ShieldAlert, Smartphone, Sun, XCircle, type LucideIcon } from 'lucide-react';
 import type { PropertyCase } from '@/lib/types';
 import type { EvidencePack } from '@/lib/engines/evaluateCase';
 import { USAGE_LABEL } from '@/lib/engines/usage';
@@ -18,11 +18,10 @@ export default function UsageTrustTab({ c, e }: { c: PropertyCase; e: EvidencePa
   const omission = e.trust.omissionFraudBlock;
 
   const telemetry: { label: string; ok: boolean; detail: string; icon: LucideIcon }[] = [
-    { label: 'GPS-in-Parcel', ok: t.gpsInParcel, detail: t.gpsInParcel ? 'Inside polygon / ≤ 25 m centroid' : 'Outside parcel', icon: MapPin },
+    { label: 'Geo-fence: at pledged property', ok: t.gpsInParcel, detail: t.gpsInParcel ? 'Photos inside parcel / ≤ 25 m of LOS pin' : 'Photos taken away from the property', icon: MapPin },
     { label: 'Live Camera Only', ok: t.liveCameraOnly, detail: t.liveCameraOnly ? 'No gallery / screenshots' : 'Gallery upload detected', icon: Camera },
     { label: 'Device Attestation', ok: t.deviceAttested, detail: t.deviceAttested ? 'Not rooted / emulator / mock-GPS' : 'Attestation failed', icon: Smartphone },
     { label: 'Sun-Angle Forensics', ok: t.sunAngleMatched, detail: t.sunAngleMatched ? 'Shadows match solar azimuth' : 'Shadow mismatch', icon: Sun },
-    { label: 'Face Match (KYC)', ok: t.faceMatched, detail: t.faceMatched ? 'Matched to Aadhaar / DigiLocker selfie' : 'No match', icon: ScanFace },
     {
       label: 'Floor Coverage Lock',
       ok: t.floorCoverageLocked && !omission,

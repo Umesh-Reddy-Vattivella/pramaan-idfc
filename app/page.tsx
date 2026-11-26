@@ -106,7 +106,7 @@ export default function PortfolioPage() {
             href="/capture"
             className="inline-flex items-center gap-1.5 rounded-lg bg-maroon px-3.5 py-2 text-sm font-semibold text-white shadow-sm hover:bg-maroon-deep"
           >
-            <Plus className="h-4 w-4" /> Start Owner Self-Capture
+            <Plus className="h-4 w-4" /> Send Customer Valuation Link
           </Link>
           <Link
             href="/value"

@@ -24,6 +24,7 @@ const Loading = ({ h }: { h: number }) => (
 const GoogleMapView = dynamic(() => import('@/components/maps/GoogleMapView'), { ssr: false, loading: () => <Loading h={300} /> });
 const LeafletSatellite = dynamic(() => import('@/components/SatelliteMap'), { ssr: false, loading: () => <Loading h={380} /> });
 const LeafletCapture = dynamic(() => import('@/components/capture/CaptureMap'), { ssr: false, loading: () => <Loading h={230} /> });
+const LeafletSpec = dynamic(() => import('@/components/maps/LeafletSpecMap'), { ssr: false, loading: () => <Loading h={280} /> });
 const LeafletPin = dynamic(() => import('@/components/maps/LeafletPinMap'), { ssr: false, loading: () => <Loading h={300} /> });
 
 /** Google first, Leaflet on failure. */
@@ -119,6 +120,17 @@ export function PinMap(props: { center: [number, number]; pin: [number, number] 
       ) : (
         <LeafletPin {...props} />
       )}
+    </Provider>
+  );
+}
+
+/* ---------------- Generic spec map (geo-fence views: customer link + workbench) ---------------- */
+
+export function SpecMap({ spec, height = 280 }: { spec: MapSpec; height?: number }) {
+  const [useGoogle, fail] = useGoogleMaps();
+  return (
+    <Provider google={useGoogle}>
+      {useGoogle ? <GoogleMapView spec={spec} height={height} onFail={fail} followCenter /> : <LeafletSpec spec={spec} height={height} />}
     </Provider>
   );
 }

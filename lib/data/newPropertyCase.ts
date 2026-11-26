@@ -5,6 +5,7 @@
    ------------------------------------------------------------------ */
 import type { LiveEvidenceSnapshot, PropertyCase, UsageClass } from '@/lib/types';
 import type { LiveAggregation } from '@/lib/engines/marketEvidence';
+import { residualLife, type StructureType } from '@/lib/engines/valuation';
 
 export interface NewFloor {
   floorName: string;
@@ -31,7 +32,9 @@ export interface NewPropertyForm {
   hasSanctionedPlan: boolean;
   noPlanPolicy: PropertyCase['noPlanPolicy'];
   ageYears: number;
+  /** Legacy field (doc autofill); residual life is computed from structure + age. */
   residualLifeYears: number;
+  structure: StructureType;
   constructionRatePerSqft: number;
   amenitiesValueInr: number;
   fsvRatio: number;
@@ -67,6 +70,7 @@ export const EMPTY_FORM: NewPropertyForm = {
   noPlanPolicy: 'LAND_ONLY',
   ageYears: 5,
   residualLifeYears: 55,
+  structure: 'RCC_FRAMED',
   constructionRatePerSqft: 0,
   amenitiesValueInr: 0,
   fsvRatio: 0.8,
@@ -129,7 +133,7 @@ export function buildNewPropertyCase(
     // No capture ≠ omission fraud: coverage is simply not locked (floorCoverageLocked = false).
     interiorWalkedFloors: Math.max(1, floors.length),
     ageYears: f.ageYears,
-    residualLifeYears: f.residualLifeYears,
+    residualLifeYears: residualLife(f.structure, f.ageYears).residualLifeYears,
     gisHazards: { forestBuffer: false, roadWidening: f.roadWideningLossSqft > 0, crzOrWaterbody: false, htLine: false, cautionArea: false, negativeArea: false },
     boundaries: [],
 
@@ -150,7 +154,7 @@ export function buildNewPropertyCase(
     cvConfidencePct: ok ? 95 : 0,
     recordConfirmedUsage: f.usage,
     utilitySummary: ok ? 'Usage as declared and confirmed in the (simulated) owner self-capture' : 'Usage as declared — not yet verified by owner self-capture',
-    trustChecks: { gpsInParcel: ok, liveCameraOnly: ok, deviceAttested: ok, sunAngleMatched: ok, faceMatched: ok, floorCoverageLocked: ok },
+    trustChecks: { gpsInParcel: ok, liveCameraOnly: ok, deviceAttested: ok, sunAngleMatched: ok, floorCoverageLocked: ok },
 
     liveEvidence: snapshot ?? undefined,
     surveyDeedNumbers: splitList(f.surveyDeed),
@@ -165,6 +169,7 @@ export function buildNewPropertyCase(
       { label: 'Spatial tier', value: agg.medianDistanceKm === null ? 'No geocoded comparables → District benchmark (penalised)' : `Median comparable distance ${agg.medianDistanceKm.toFixed(2)} km` },
       { label: 'Bias corrections', value: 'Default, uncalibrated: listings × 0.86 · auctions ÷ 0.80 · reported sales × 1.00 (locality calibration happens in pilot)' },
       { label: 'Construction rate', value: 'As entered by the underwriter (as-valued, depreciated)' },
+      { label: 'Residual life', value: residualLife(f.structure, f.ageYears).formula },
       ...(f.docsRead.length ? [{ label: 'Documents read (OCR)', value: f.docsRead.map((d) => `${d.docType} (${d.language})`).join(' · ') }] : []),
       ...(f.deedBoundaries
         ? [{ label: 'Boundaries (deed)', value: `E: ${f.deedBoundaries.East || '—'} · W: ${f.deedBoundaries.West || '—'} · N: ${f.deedBoundaries.North || '—'} · S: ${f.deedBoundaries.South || '—'} — site match pending owner capture` }]

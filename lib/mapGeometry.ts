@@ -114,3 +114,39 @@ export function compsSpec(c: PropertyCase, comparables: ComparablePin[]): MapSpe
     ],
   };
 }
+
+/* ---------------- Geo-fence spec: parcel + fence ring + geo-tagged photo points ---------------- */
+
+export interface FencePhotoPoint {
+  id: string;
+  label: string;
+  lat: number;
+  lng: number;
+  status: 'INSIDE' | 'NEAR' | 'OUTSIDE';
+  distanceM: number;
+}
+
+export const FENCE_COLOR: Record<FencePhotoPoint['status'], string> = { INSIDE: '#16a34a', NEAR: '#eda100', OUTSIDE: '#DC2626' };
+
+export function geofenceSpec(
+  pin: { lat: number; lng: number },
+  parcel: LatLng[],
+  fenceRadiusM: number,
+  points: FencePhotoPoint[],
+  live?: { lat: number; lng: number } | null,
+): MapSpec {
+  const spec: MapSpec = { center: [pin.lat, pin.lng], zoom: 19, base: 'satellite', markers: [], polygons: [], polylines: [], circles: [] };
+  spec.polygons.push({ id: 'parcel', path: parcel, color: '#ffffff', fill: '#9C1D26', fillOpacity: 0.25, weight: 2, tooltip: 'Pledged property (from loan application)' });
+  spec.circles.push({ id: 'fence', center: [pin.lat, pin.lng], radiusM: fenceRadiusM, color: '#38bdf8', tooltip: `Geo-fence ${fenceRadiusM} m` });
+  spec.markers.push({ id: 'pin', pos: [pin.lat, pin.lng], color: '#9C1D26', size: 7, tooltip: 'Property pin (LOS)' });
+  const far = points.filter((p) => p.status === 'OUTSIDE');
+  for (const p of points) {
+    spec.markers.push({ id: `ph-${p.id}`, pos: [p.lat, p.lng], color: FENCE_COLOR[p.status], size: 6, tooltip: `${p.label} · ${Math.round(p.distanceM)} m` });
+  }
+  for (const p of far) {
+    spec.polylines.push({ id: `far-${p.id}`, path: [[pin.lat, pin.lng], [p.lat, p.lng]], color: '#DC2626', weight: 2, dashed: true });
+  }
+  if (live) spec.markers.push({ id: 'live', pos: [live.lat, live.lng], color: '#2563eb', size: 8, tooltip: 'You are here', permanent: true });
+  if (far.length) spec.zoom = 15;
+  return spec;
+}

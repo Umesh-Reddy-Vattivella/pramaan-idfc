@@ -255,6 +255,42 @@ export function buildIdfcPdf(c: PropertyCase, e: EvidencePack): { doc: jsPDF; fi
   const triggers = [...e.routing.physicalTriggers.map((t) => ['Physical', t]), ...e.routing.remoteTriggers.map((t) => ['Remote', t])];
   if (triggers.length) table(['Trigger', 'Reason'], triggers, { colWidths: [24, 158] });
 
+  /* ---------------- 9. Technical sanity (mortgageability) ---------------- */
+  const sn = e.sanity;
+  const sColor = (st: string): [number, number, number] =>
+    st === 'PASS' ? [21, 128, 61] : st === 'WARN' ? [180, 83, 9] : st === 'PENDING' ? [100, 116, 139] : [220, 38, 38];
+  section(`${v.income ? '9' : '8'}. Technical Sanity Report — ${sn.verdictLabel}`);
+  table(
+    ['Check', 'Status', 'Finding & source', 'Action to clear upfront'],
+    sn.checks.map((x) => [
+      `${x.id} ${x.title}`,
+      { content: x.status, styles: { fontStyle: 'bold', textColor: sColor(x.status) } },
+      `${x.finding}\nSource: ${x.sources.map((s) => `${s.name}${s.live ? '' : ' (simulated)'}`).join('; ')}`,
+      x.action,
+    ]),
+    { colWidths: [38, 20, 78, 46] },
+  );
+
+  const capture = c.customerLink?.submission;
+  if (capture && e.geofence) {
+    section('Customer-Link Capture — Geo-fence (photos vs pledged property)');
+    table(
+      ['Photo', 'Lat, Lng (+/- m)', 'Distance', 'Fence', 'Live', 'Hash'],
+      e.geofence.photos.map((g) => {
+        const ph = capture.photos.find((p) => p.id === g.id)!;
+        return [g.label, `${ph.lat.toFixed(6)}, ${ph.lng.toFixed(6)} (+/-${ph.accuracyM})`, `${Math.round(g.distanceM)} m`, g.status, g.live ? 'Yes' : 'NO', ph.hash];
+      }),
+      { colWidths: [40, 50, 20, 20, 14, 38] },
+    );
+    if (capture.rooms.length) {
+      table(
+        ['Room', 'Floor', 'L x W (ft)', 'Area', 'Method'],
+        capture.rooms.map((r) => [r.name, r.floorName, `${r.lengthFt} x ${r.widthFt}`, sqft(r.lengthFt * r.widthFt), r.method]),
+        { colWidths: [40, 44, 34, 34, 30] },
+      );
+    }
+  }
+
   /* ---------------- Annex ---------------- */
   doc.addPage();
   y = 30;

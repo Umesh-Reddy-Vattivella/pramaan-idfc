@@ -1,7 +1,7 @@
 /* ------------------------------------------------------------------
    Engine 1: MEASURE (PRD §3.2) — pure, deterministic functions only.
    ------------------------------------------------------------------ */
-import type { PropertyCase } from '@/lib/types';
+import type { FloorAreaRow, PropertyCase } from '@/lib/types';
 
 /** Formula 1 — Net Usable Plot Area: A_net = min(A_deed, A_record) - A_widening */
 export function netUsablePlotArea(deedSqft: number, recordSqft: number, wideningLossSqft: number): number {
@@ -73,6 +73,62 @@ export function heightFromShadow(shadowLengthM: number, sunElevationDeg: number)
 /** Formula 6 — Known-object monocular scaling: Length_ft = px * (ref_ft / ref_px). Default reference: door = 7.0 ft. */
 export function knownObjectLengthFt(measuredPixels: number, referenceObjectPixels: number, referenceObjectFt = 7.0): number {
   return measuredPixels * (referenceObjectFt / referenceObjectPixels);
+}
+
+/* ---------------- Room-by-room interior measurement (customer link) ---------------- */
+
+/** Reference objects for monocular scaling when the phone has no AR. Lengths in feet. */
+export const REFERENCE_OBJECTS = {
+  A4_LONG: { label: 'A4 sheet — long edge (29.7 cm)', ft: 0.9744 },
+  DOOR_HEIGHT: { label: 'Standard door height (7 ft)', ft: 7.0 },
+  BRICK: { label: 'Standard brick length (9 in)', ft: 0.75 },
+  FLOOR_TILE_2FT: { label: '2 ft × 2 ft floor tile', ft: 2.0 },
+} as const;
+export type ReferenceObjectId = keyof typeof REFERENCE_OBJECTS;
+
+/** Pixel distance between two image points. */
+export function pixelDistance(a: { x: number; y: number }, b: { x: number; y: number }): number {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+/** Distance between two 3-D points (metres) → feet. Used for WebXR hit-test measurements. */
+export function distance3dFt(a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }): number {
+  return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z) / 0.3048;
+}
+
+/** Carpet-to-built-up loading for independent buildings (walls, ducts, stairs). */
+export const CARPET_TO_BUA_LOADING = 1.2;
+/** Tolerance before measured BUA counts as exceeding the approved floor area. */
+export const PLAN_MATCH_TOLERANCE_PCT = 10;
+
+export interface RoomInput {
+  floorName: string;
+  lengthFt: number;
+  widthFt: number;
+}
+
+/** Σ(room L × W) per floor → implied BUA = carpet × 1.20, compared with the approved floor area. */
+export function roomsVsPlan(rooms: RoomInput[], floors: FloorAreaRow[]) {
+  const byFloor = new Map<string, number>();
+  for (const r of rooms) {
+    const a = Math.max(0, r.lengthFt) * Math.max(0, r.widthFt);
+    byFloor.set(r.floorName, (byFloor.get(r.floorName) ?? 0) + a);
+  }
+  const rows = [...byFloor.entries()].map(([floorName, carpetSqft]) => {
+    const fl = floors.find((f) => f.floorName === floorName);
+    const approvedSqft = fl?.sanctionedSqft ?? 0;
+    const impliedBuaSqft = carpetSqft * CARPET_TO_BUA_LOADING;
+    const excessPct = approvedSqft > 0 ? ((impliedBuaSqft - approvedSqft) / approvedSqft) * 100 : null;
+    return {
+      floorName,
+      carpetSqft,
+      impliedBuaSqft,
+      approvedSqft,
+      excessPct,
+      exceeds: excessPct !== null && excessPct > PLAN_MATCH_TOLERANCE_PCT,
+    };
+  });
+  return { rows, totalCarpetSqft: rows.reduce((s, r) => s + r.carpetSqft, 0), anyExceeds: rows.some((r) => r.exceeds) };
 }
 
 /** Formula 7 — Omission Fraud Coverage Lock */

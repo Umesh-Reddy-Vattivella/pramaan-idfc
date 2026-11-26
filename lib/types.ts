@@ -111,7 +111,6 @@ export interface PropertyCase {
     liveCameraOnly: boolean;
     deviceAttested: boolean;
     sunAngleMatched: boolean;
-    faceMatched: boolean;
     floorCoverageLocked: boolean;
   };
   // Legacy Audit Comparison Fields (for Auto-QC)
@@ -146,6 +145,119 @@ export interface PropertyCase {
   roadSide?: 'East' | 'West' | 'North' | 'South'; // approach-road side (map widening overlay)
   liveEvidence?: LiveEvidenceSnapshot; // live market evidence snapshot (replays offline)
   cvDetections?: { label: string; confidencePct: number; frame: string; usage: UsageClass }[]; // CV photo annotations
+  /** Loan-origination (LOS) record this valuation was triggered from — pre-fills the customer link. */
+  los?: LosRecord;
+  /** Customer valuation link (sent from the bank) and what came back from it. */
+  customerLink?: CustomerLinkState;
+}
+
+/* ---------------- Loan origination (LOS) record + customer link ---------------- */
+
+export type LosDocType =
+  | 'SALE_DEED'
+  | 'TITLE_CHAIN'
+  | 'ENCUMBRANCE_CERT'
+  | 'INDEX_II'
+  | 'APPROVED_PLAN'
+  | 'LAYOUT_PLAN'
+  | 'LAND_RECORD'
+  | 'PROPERTY_TAX'
+  | 'OC_CC';
+
+export type LosDocStatus = 'ON_FILE' | 'PENDING' | 'UPLOADED' | 'NOT_AVAILABLE' | 'NOT_APPLICABLE';
+
+export interface LosDocument {
+  type: LosDocType;
+  label: string;
+  mandatory: boolean;
+  status: LosDocStatus;
+  /** Reference printed on the document (doc no., plan no., ULPIN …). */
+  ref?: string;
+  /** Title-chain / EC coverage, calendar years. */
+  coversFromYear?: number;
+  coversToYear?: number;
+  /** File name when uploaded through the customer link. */
+  fileName?: string;
+}
+
+export interface LosRecord {
+  loanAppNo: string;
+  product: 'LAP';
+  borrowerName: string;
+  propertyAddress: string;
+  propertyType: UsageClass;
+  /** KYC is done once at onboarding — never repeated in the technical journey. */
+  kycStatus: string;
+  sourcedBy: string;
+  documents: LosDocument[];
+}
+
+export interface GeoPhoto {
+  id: string;
+  /** Shot-list slot, e.g. 'FRONT', 'LEFT', 'INTERIOR_GF'. */
+  slot: string;
+  label: string;
+  lat: number;
+  lng: number;
+  accuracyM: number;
+  takenAt: string; // ISO
+  /** Age of the image file when attached (ms) — gallery uploads are old. */
+  fileAgeMs: number;
+  hash: string;
+  /** Small JPEG data-URL thumbnail (<= 360 px). */
+  thumb?: string;
+}
+
+export type RoomMethod = 'AR' | 'TAPE' | 'REFERENCE_OBJECT';
+
+export interface RoomMeasurement {
+  id: string;
+  name: string;
+  floorName: string;
+  lengthFt: number;
+  widthFt: number;
+  method: RoomMethod;
+}
+
+export type CapturedBy = 'OWNER' | 'FAMILY' | 'REPRESENTATIVE';
+
+export interface CaptureSubmission {
+  submittedAt: string;
+  capturedBy: CapturedBy;
+  photos: GeoPhoto[];
+  rooms: RoomMeasurement[];
+  /** Document statuses after the customer's step (uploads / "not available"). */
+  documents: LosDocument[];
+  userAgent?: string;
+  arSupported?: boolean;
+}
+
+export interface LinkPrefill {
+  token: string;
+  caseId: string;
+  loanAppNo: string;
+  borrowerName: string;
+  propertyAddress: string;
+  propertyType: UsageClass;
+  city: string;
+  lat: number;
+  lng: number;
+  parcel: [number, number][];
+  floors: string[];
+  documents: LosDocument[];
+  createdAt: string;
+  expiresAt: string;
+}
+
+export type LinkStatus = 'SENT' | 'OPENED' | 'SUBMITTED';
+
+export interface CustomerLinkState {
+  token: string;
+  url: string;
+  sentAt: string;
+  status: LinkStatus;
+  openedAt?: string;
+  submission?: CaptureSubmission;
 }
 
 export type CaseOrigin = 'SEED' | 'SELF_CAPTURE' | 'LIVE_UPLOAD' | 'LIVE_MARKET';
