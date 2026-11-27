@@ -81,6 +81,8 @@ export interface Snapshot {
   source: 'CUSTOMER_DEVICE' | 'BANK_FRAME';
   width?: number;
   height?: number;
+  /** Snapped during the call but not yet placed on a designated view: kept out of the geo-fence and the report. */
+  unassigned?: boolean;
 }
 
 export interface LocationFix {

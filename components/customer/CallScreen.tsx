@@ -4,11 +4,12 @@
  * Customer side of the bank's video inspection call. Listens for an incoming call while the portal is open,
  * rings, and on Answer asks for LOCATION first (it proves the photos are taken at the property), then the camera.
  * Snapshots are taken on this phone when the bank presses capture: full-resolution frame + this phone's GPS.
+ * Regular call controls: mic on/off, front / back camera, end call. The bank sees the mic and camera state.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Camera, Loader2, MapPin, Phone, PhoneOff, Video } from 'lucide-react';
+import { Camera, Loader2, MapPin, Mic, MicOff, Phone, PhoneOff, SwitchCamera, Video } from 'lucide-react';
 import type { LocationFix } from '@/lib/domain/types';
-import { getIceServers, grabFrame, iceGatheringDone, type BankToCustomer, type CustomerToBank } from '@/lib/client/rtc';
+import { callClock, getIceServers, grabFrame, iceGatheringDone, type BankToCustomer, type CustomerToBank, type Facing } from '@/lib/client/rtc';
 
 interface IncomingCall {
   id: string;
@@ -74,6 +75,12 @@ export default function CallScreen({ onActivity }: { onActivity: () => void }) {
   const [flash, setFlash] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [fix, setFix] = useState<{ lat: number; lng: number; acc: number } | null>(null);
+  const [micOn, setMicOn] = useState(true);
+  const [hasMic, setHasMic] = useState(true);
+  const [facingState, setFacingState] = useState<Facing>('environment');
+  const [flipping, setFlipping] = useState(false);
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
   const dismissed = useRef<Set<string>>(new Set());
   const pc = useRef<RTCPeerConnection | null>(null);
   const dc = useRef<RTCDataChannel | null>(null);
@@ -83,7 +90,9 @@ export default function CallScreen({ onActivity }: { onActivity: () => void }) {
   const watchId = useRef<number | null>(null);
   const lastFix = useRef<GeolocationPosition | null>(null);
   const pendingFixes = useRef<LocationFix[]>([]);
-  const facing = useRef<'environment' | 'user'>('environment');
+  const facing = useRef<Facing>('environment');
+  const micRef = useRef(true);
+  const flippingRef = useRef(false);
   const stopRing = useRef<(() => void) | null>(null);
   const onActivityRef = useRef(onActivity);
   onActivityRef.current = onActivity;
@@ -159,8 +168,27 @@ export default function CallScreen({ onActivity }: { onActivity: () => void }) {
     return () => clearInterval(id);
   }, [phase, call, cleanup]);
 
+  /* call timer */
+  useEffect(() => {
+    if (phase !== 'live') return;
+    setStartedAt((s) => s ?? Date.now());
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [phase]);
+
   const send = (m: CustomerToBank) => {
     if (dc.current?.readyState === 'open') dc.current.send(JSON.stringify(m));
+  };
+  const sendMedia = () => send({ t: 'media', mic: micRef.current && !!stream.current?.getAudioTracks().length, facing: facing.current });
+
+  const toggleMic = () => {
+    const tracks = stream.current?.getAudioTracks() ?? [];
+    if (!tracks.length) return;
+    const on = !micRef.current;
+    tracks.forEach((t) => (t.enabled = on));
+    micRef.current = on;
+    setMicOn(on);
+    sendMedia();
   };
 
   const decline = async () => {
@@ -181,12 +209,16 @@ export default function CallScreen({ onActivity }: { onActivity: () => void }) {
     onActivityRef.current();
   };
 
-  const camera = (mode: 'environment' | 'user') =>
+  const videoOnly = (mode: Facing) =>
     navigator.mediaDevices
-      .getUserMedia({ video: { facingMode: { ideal: mode }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: true })
+      .getUserMedia({ video: { facingMode: { ideal: mode }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false })
       .catch(() => navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: mode } }, audio: false }));
+  const camera = (mode: Facing) =>
+    navigator.mediaDevices
+      .getUserMedia({ video: { facingMode: { ideal: mode }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: { echoCancellation: true, noiseSuppression: true } })
+      .catch(() => videoOnly(mode));
 
-  const takePhoto = async (label: string, area: 'EXTERIOR' | 'INTERIOR', floor?: string) => {
+  const takePhoto = async (label: string, area: 'EXTERIOR' | 'INTERIOR', floor?: string, rid?: string, tray?: boolean) => {
     try {
       if (!video.current) throw new Error('Camera not ready');
       const frame = await grabFrame(video.current);
@@ -202,6 +234,7 @@ export default function CallScreen({ onActivity }: { onActivity: () => void }) {
         label,
         area,
         floor,
+        unassigned: tray || undefined,
         lat: pos.coords.latitude,
         lng: pos.coords.longitude,
         acc: pos.coords.accuracy,
@@ -212,29 +245,53 @@ export default function CallScreen({ onActivity }: { onActivity: () => void }) {
         height: frame.height,
       });
       if (!r.ok) throw new Error(((await r.json().catch(() => ({}))) as { error?: string }).error ?? 'Upload failed');
-      send({ t: 'photo-ok', label, thumb: frame.thumb, lat: pos.coords.latitude, lng: pos.coords.longitude, acc: pos.coords.accuracy, at });
-      setToast(`Photo sent: ${label}`);
+      send({ t: 'photo-ok', rid, label, thumb: frame.thumb, lat: pos.coords.latitude, lng: pos.coords.longitude, acc: pos.coords.accuracy, at });
+      setToast(tray ? 'Photo sent to the bank' : `Photo sent: ${label}`);
       setTimeout(() => setToast(null), 2500);
       onActivityRef.current();
     } catch (e) {
-      send({ t: 'photo-err', label, message: e instanceof Error ? e.message : 'Capture failed' });
+      send({ t: 'photo-err', rid, label, message: e instanceof Error ? e.message : 'Capture failed' });
     }
   };
 
+  /** Front <-> back camera. Many phones cannot open both cameras at once, so the old one is released if the first try fails. */
   const flip = async () => {
-    const next = facing.current === 'environment' ? 'user' : 'environment';
-    try {
-      const s = await camera(next);
-      const track = s.getVideoTracks()[0];
-      await pc.current?.getSenders().find((x) => x.track?.kind === 'video')?.replaceTrack(track);
-      stream.current?.getVideoTracks().forEach((x) => x.stop());
-      s.getAudioTracks().forEach((x) => x.stop());
+    if (flippingRef.current) return;
+    flippingRef.current = true;
+    setFlipping(true);
+    const next: Facing = facing.current === 'environment' ? 'user' : 'environment';
+    const old = stream.current?.getVideoTracks()[0];
+    const applyTrack = async (track: MediaStreamTrack, mode: Facing) => {
+      await pc.current?.getTransceivers().find((t) => t.receiver.track.kind === 'video')?.sender.replaceTrack(track);
       const merged = new MediaStream([track, ...(stream.current?.getAudioTracks() ?? [])]);
       stream.current = merged;
       if (video.current) video.current.srcObject = merged;
-      facing.current = next;
+      facing.current = mode;
+      setFacingState(mode);
+    };
+    try {
+      let s: MediaStream;
+      try {
+        s = await videoOnly(next);
+        old?.stop();
+      } catch {
+        old?.stop();
+        s = await videoOnly(next);
+      }
+      await applyTrack(s.getVideoTracks()[0], next);
     } catch {
+      // Could not open the other camera: get the previous one back so the call keeps its video.
+      if (old?.readyState === 'ended') {
+        const back = await videoOnly(facing.current).catch(() => null);
+        if (back) await applyTrack(back.getVideoTracks()[0], facing.current).catch(() => undefined);
+      }
       send({ t: 'status', text: 'Could not switch camera on this phone.' });
+      setToast('Could not switch camera');
+      setTimeout(() => setToast(null), 2500);
+    } finally {
+      flippingRef.current = false;
+      setFlipping(false);
+      sendMedia();
     }
   };
 
@@ -262,6 +319,14 @@ export default function CallScreen({ onActivity }: { onActivity: () => void }) {
       return;
     }
     stream.current = s;
+    facing.current = 'environment';
+    setFacingState('environment');
+    const mic = s.getAudioTracks().length > 0;
+    micRef.current = true; // every call starts unmuted
+    setHasMic(mic);
+    s.getAudioTracks().forEach((t) => (t.enabled = micRef.current));
+    setMicOn(micRef.current && mic);
+    setStartedAt(null);
     setPhase('connecting');
     post('/api/me', { action: 'location', on: true }).catch(() => undefined);
     try {
@@ -276,11 +341,13 @@ export default function CallScreen({ onActivity }: { onActivity: () => void }) {
         e.channel.onopen = () => {
           const p = lastFix.current;
           if (p) send({ t: 'geo', lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy, at: new Date(p.timestamp).toISOString() });
+          sendMedia();
+          if (!mic) send({ t: 'status', text: 'The customer’s microphone is not available — use written instructions.' });
         };
         e.channel.onmessage = (m) => {
           const msg = JSON.parse(String(m.data)) as BankToCustomer;
           if (msg.t === 'say') setInstruction(msg.text);
-          if (msg.t === 'capture') takePhoto(msg.label, msg.area, msg.floor);
+          if (msg.t === 'capture') takePhoto(msg.label, msg.area, msg.floor, msg.rid, msg.tray);
           if (msg.t === 'flip') flip();
         };
       };
@@ -376,18 +443,27 @@ export default function CallScreen({ onActivity }: { onActivity: () => void }) {
       {(phase === 'connecting' || phase === 'live') && (
         <>
           <div className="relative flex-1">
-            <video ref={video} autoPlay playsInline muted className="h-full w-full object-cover" />
+            <video ref={video} autoPlay playsInline muted className={`h-full w-full object-cover ${facingState === 'user' ? '-scale-x-100' : ''}`} />
             {flash && <div className="absolute inset-0 bg-white" />}
             <div className="absolute inset-x-0 top-0 bg-gradient-to-b from-black/70 to-transparent p-4">
               <div className="flex items-center gap-2 text-sm">
                 {phase === 'live' ? <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-red-500" /> : <Loader2 className="h-4 w-4 animate-spin" />}
                 {phase === 'live' ? 'Connected to the bank — follow the instructions' : 'Connecting…'}
+                {phase === 'live' && <span className="ml-auto font-mono tabular-nums text-white/80">{callClock(startedAt, now)}</span>}
               </div>
-              {fix && (
-                <div className="mt-1 flex items-center gap-1 text-xs text-white/70">
-                  <MapPin className="h-3 w-3" /> Location on · ±{Math.round(fix.acc)} m
-                </div>
-              )}
+              <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-white/70">
+                {fix && (
+                  <span className="flex items-center gap-1">
+                    <MapPin className="h-3 w-3" /> Location on · ±{Math.round(fix.acc)} m
+                  </span>
+                )}
+                {!micOn && (
+                  <span className="flex items-center gap-1 rounded-full bg-red-600/90 px-2 py-0.5 font-semibold text-white">
+                    <MicOff className="h-3 w-3" /> {hasMic ? 'You are muted' : 'No microphone'}
+                  </span>
+                )}
+                <span>{facingState === 'user' ? 'Front camera' : 'Back camera'}</span>
+              </div>
             </div>
             {instruction && (
               <div className="absolute inset-x-4 bottom-4 rounded-2xl bg-black/75 px-4 py-3 text-center text-lg font-semibold">
@@ -397,9 +473,20 @@ export default function CallScreen({ onActivity }: { onActivity: () => void }) {
             {toast && <div className="absolute inset-x-8 top-20 rounded-xl bg-emerald-600 px-3 py-2 text-center text-sm font-semibold">✓ {toast}</div>}
             {problem && <div className="absolute inset-x-8 top-32 rounded-xl bg-amber-600 px-3 py-2 text-center text-sm">{problem}</div>}
           </div>
-          <div className="flex justify-center bg-black p-5">
-            <button onClick={hangUp} className="flex items-center gap-2 rounded-full bg-red-600 px-6 py-3 font-semibold">
-              <PhoneOff className="h-5 w-5" /> End call
+          <div className="flex items-start justify-center gap-8 bg-black px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-4 text-xs">
+            <button onClick={toggleMic} disabled={!hasMic} className="flex flex-col items-center gap-1.5 disabled:opacity-40" aria-pressed={!micOn}>
+              <span className={`flex h-14 w-14 items-center justify-center rounded-full ${micOn ? 'bg-white/15' : 'bg-white text-ink'}`}>{micOn ? <Mic className="h-6 w-6" /> : <MicOff className="h-6 w-6" />}</span>
+              {!hasMic ? 'No mic' : micOn ? 'Mute' : 'Unmute'}
+            </button>
+            <button onClick={flip} disabled={flipping} className="flex flex-col items-center gap-1.5 disabled:opacity-60">
+              <span className="flex h-14 w-14 items-center justify-center rounded-full bg-white/15">{flipping ? <Loader2 className="h-6 w-6 animate-spin" /> : <SwitchCamera className="h-6 w-6" />}</span>
+              {facingState === 'user' ? 'Back camera' : 'Front camera'}
+            </button>
+            <button onClick={hangUp} className="flex flex-col items-center gap-1.5">
+              <span className="flex h-14 w-14 items-center justify-center rounded-full bg-red-600">
+                <PhoneOff className="h-6 w-6" />
+              </span>
+              End call
             </button>
           </div>
         </>

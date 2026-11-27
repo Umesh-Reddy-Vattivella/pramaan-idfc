@@ -3,8 +3,9 @@
   GET                                                  → { call } ringing / active call (with offer)
   POST { action:'answer', callId, answer }
   POST { action:'decline' | 'end', callId }
-  POST { action:'photo', label, area, floor?, lat, lng, acc, hash, thumb, full, width, height }
-       → snapshot taken on this phone on the bank's instruction (full-res frame + phone GPS)
+  POST { action:'photo', label, area, floor?, unassigned?, lat, lng, acc, hash, thumb, full, width, height }
+       → snapshot taken on this phone on the bank's instruction (full-res frame + phone GPS).
+         unassigned = a free snap for the bank's tray, placed on a view later.
 */
 import { randomUUID } from 'node:crypto';
 import { NextResponse } from 'next/server';
@@ -43,6 +44,7 @@ interface Body {
   full?: string;
   width?: number;
   height?: number;
+  unassigned?: boolean;
 }
 
 export async function POST(req: Request) {
@@ -73,8 +75,9 @@ export async function POST(req: Request) {
       const now = new Date().toISOString();
       const snap: Snapshot = {
         id: randomUUID(),
-        label: String(b.label ?? 'Snapshot').slice(0, 80),
+        label: b.unassigned ? 'Unassigned snap' : String(b.label ?? 'Snapshot').slice(0, 80),
         area: b.area === 'INTERIOR' ? 'INTERIOR' : 'EXTERIOR',
+        unassigned: b.unassigned === true ? true : undefined,
         floor: b.floor ? String(b.floor).slice(0, 40) : undefined,
         fileId,
         thumb: typeof b.thumb === 'string' && b.thumb.length < 120_000 ? b.thumb : '',
@@ -91,7 +94,7 @@ export async function POST(req: Request) {
         addSnapshot(a, snap);
         addFixes(a, [{ lat: snap.lat!, lng: snap.lng!, acc: snap.accuracyM ?? 0, at: now }]);
       });
-      return res ? NextResponse.json({ ok: true, id: snap.id }) : fail('Application not found', 404);
+      return res ? NextResponse.json({ ok: true, id: snap.id, thumb: snap.thumb }) : fail('Application not found', 404);
     }
     return fail('Unknown action');
   } catch (err) {

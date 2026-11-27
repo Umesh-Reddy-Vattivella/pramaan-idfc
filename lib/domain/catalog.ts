@@ -100,6 +100,9 @@ export const FROM_LABEL: Record<DocFrom, string> = { BANK: 'Bank (loan file)', C
 
 /* ---------------- inspection shot list ---------------- */
 
+/** Snapshots placed on a designated view (tray snaps excluded). */
+export const assignedSnapshots = <T extends { unassigned?: boolean }>(s: T[]): T[] => s.filter((x) => !x.unassigned);
+
 export const EXTERIOR_SHOTS = [
   'Front elevation',
   'Approach road',

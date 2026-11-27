@@ -4,7 +4,7 @@
    the customer status view and the dashboard list.
    ------------------------------------------------------------------ */
 import type { Application, ApplicationSummary, CustomerView, Stage, StageState } from '@/lib/domain/types';
-import { isBuilt, PROPERTY_TYPE_LABEL } from '@/lib/domain/catalog';
+import { assignedSnapshots, isBuilt, PROPERTY_TYPE_LABEL } from '@/lib/domain/catalog';
 import { runEvidence, type EvidenceResult } from './evidence';
 import { liveLocation, MIN_EXTERIOR_SNAPSHOTS, runGeofence, type GeofenceResult } from './geofence';
 import { runMeasure, type MeasureResult } from './measure';
@@ -83,7 +83,7 @@ function stages(a: Application, g: GeofenceResult, m: MeasureResult, v: Valuatio
 
 export function evaluate(a: Application, now = new Date()): Evaluation {
   const pin = a.property.lat !== null && a.property.lng !== null ? { lat: a.property.lat, lng: a.property.lng } : null;
-  const geofence = runGeofence(a.inspection.snapshots, pin, a.parcel);
+  const geofence = runGeofence(assignedSnapshots(a.inspection.snapshots), pin, a.parcel);
   const measure = runMeasure(a);
   const evidence = runEvidence(a.market.points, pin, now);
   const valuation = runValuation(a, measure, evidence);
@@ -104,7 +104,7 @@ export function toCustomerView(a: Application, now = new Date()): CustomerView {
     stages: e.stages.map((s) => ({ ...s, detail: '' })),
     locationOn: a.inspection.locationOn,
     lastLocationAt: a.inspection.track.at(-1)?.at ?? null,
-    snapshotsTaken: a.inspection.snapshots.length,
+    snapshotsTaken: assignedSnapshots(a.inspection.snapshots).length,
     completed: a.review.status === 'ISSUED',
   };
 }

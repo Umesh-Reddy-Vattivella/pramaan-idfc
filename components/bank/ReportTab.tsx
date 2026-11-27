@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { BadgeCheck, Download, Loader2, RotateCcw } from 'lucide-react';
-import { OCCUPANCY_LABEL, PROPERTY_TYPE_LABEL, USAGE_LABEL } from '@/lib/domain/catalog';
+import { assignedSnapshots, OCCUPANCY_LABEL, PROPERTY_TYPE_LABEL, USAGE_LABEL } from '@/lib/domain/catalog';
 import type { Evaluation } from '@/lib/engines/evaluate';
 import { inr, metres, sqft } from '@/lib/engines/format';
 import { VERDICT_LABEL } from '@/lib/engines/sanity';
@@ -62,9 +62,9 @@ export default function ReportTab({ ctl, ev }: { ctl: AppCtl; ev: Evaluation }) 
             <Row k="Technical verdict" v={VERDICT_LABEL[ev.sanity.verdict]} />
           </tbody>
         </table>
-        {a.inspection.snapshots.length > 0 && (
+        {assignedSnapshots(a.inspection.snapshots).length > 0 && (
           <div className="mt-4 grid grid-cols-3 gap-2 sm:grid-cols-6">
-            {a.inspection.snapshots.map((s) => {
+            {assignedSnapshots(a.inspection.snapshots).map((s) => {
               const f = ev.geofence.perSnapshot[s.id];
               return (
                 <a key={s.id} href={fileUrl(s.fileId)} target="_blank" rel="noreferrer" className="overflow-hidden rounded-lg border border-slate-200">

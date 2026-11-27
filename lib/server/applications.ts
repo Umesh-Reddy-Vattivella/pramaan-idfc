@@ -184,6 +184,7 @@ export async function storeSnapshotFile(appId: string, base64: string): Promise<
 
 export function addSnapshot(a: Application, s: Snapshot) {
   a.inspection.snapshots.push(s);
+  if (s.unassigned) return; // logged when the bank places it on a view
   log(a, s.source === 'CUSTOMER_DEVICE' ? 'CUSTOMER' : 'BANK', `Snapshot captured on video call: ${s.label}${s.lat !== null ? ` (GPS ±${Math.round(s.accuracyM ?? 0)} m)` : ' (no GPS)'}`);
 }
 
@@ -220,6 +221,8 @@ export type BankOp =
   | { op: 'addDocSlot'; label: string; mandatory: boolean }
   | { op: 'setInspection'; observedFloors?: number | null; observedUsage?: Usage | null; occupancy?: Occupancy | null }
   | { op: 'deleteSnapshot'; id: string }
+  | { op: 'assignSnapshot'; id: string; label: string; area: 'EXTERIOR' | 'INTERIOR'; floor?: string }
+  | { op: 'unassignSnapshot'; id: string }
   | { op: 'upsertRoom'; room: Room }
   | { op: 'deleteRoom'; id: string }
   | { op: 'togglePoint'; id: string; included: boolean }
@@ -310,6 +313,25 @@ export function applyBankOp(a: Application, o: BankOp, user: string) {
       a.inspection.snapshots = a.inspection.snapshots.filter((s) => s.id !== o.id);
       log(a, 'BANK', 'Snapshot removed');
       return;
+    case 'assignSnapshot': {
+      const s = a.inspection.snapshots.find((x) => x.id === o.id);
+      if (!s) throw new Error('Snapshot not found');
+      const label = txt(o.label, 80);
+      if (!label) throw new Error('Name the view');
+      // One photo per view: the photo already on this view goes back to the tray.
+      for (const x of a.inspection.snapshots) if (x.id !== s.id && !x.unassigned && x.label === label) x.unassigned = true;
+      s.label = label;
+      s.area = o.area === 'INTERIOR' ? 'INTERIOR' : 'EXTERIOR';
+      s.floor = txt(o.floor, 40) || undefined;
+      s.unassigned = false;
+      log(a, 'BANK', `Snapshot placed on view: ${label}${s.lat !== null ? ` (GPS ±${Math.round(s.accuracyM ?? 0)} m)` : ' (no GPS)'}`);
+      return;
+    }
+    case 'unassignSnapshot': {
+      const s = a.inspection.snapshots.find((x) => x.id === o.id);
+      if (s) s.unassigned = true;
+      return;
+    }
     case 'upsertRoom': {
       const r = o.room;
       const room: Room = {

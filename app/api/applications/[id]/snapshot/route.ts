@@ -1,4 +1,4 @@
-/* Bank-side frame grab (fallback when the phone cannot capture): POST { label, area, floor?, full, thumb, hash, width, height }.
+/* Bank-side frame grab (fallback when the phone cannot capture): POST { label, area, floor?, unassigned?, full, thumb, hash, width, height }.
    Tagged with the customer's latest tracked location if it is under 2 minutes old; marked BANK_FRAME. */
 import { randomUUID } from 'node:crypto';
 import { NextResponse } from 'next/server';
@@ -15,7 +15,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   const { id } = await ctx.params;
   if (!ID_RE.test(id)) return fail('Bad id');
   try {
-    const b = await readJson<{ label?: string; area?: string; floor?: string; full?: string; thumb?: string; hash?: string; width?: number; height?: number }>(req);
+    const b = await readJson<{ label?: string; area?: string; floor?: string; full?: string; thumb?: string; hash?: string; width?: number; height?: number; unassigned?: boolean }>(req);
     if (!b.full) return fail('No image');
     const app = await getApplication(id);
     if (!app) return fail('Application not found', 404);
@@ -24,8 +24,9 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     const fresh = last && Date.now() - Date.parse(last.at) < 120_000 ? last : null;
     const snap: Snapshot = {
       id: randomUUID(),
-      label: String(b.label ?? 'Snapshot').slice(0, 80),
+      label: b.unassigned ? 'Unassigned snap' : String(b.label ?? 'Snapshot').slice(0, 80),
       area: b.area === 'INTERIOR' ? 'INTERIOR' : 'EXTERIOR',
+      unassigned: b.unassigned === true ? true : undefined,
       floor: b.floor ? String(b.floor).slice(0, 40) : undefined,
       fileId,
       thumb: typeof b.thumb === 'string' && b.thumb.length < 120_000 ? b.thumb : '',

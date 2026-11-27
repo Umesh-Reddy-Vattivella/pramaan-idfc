@@ -30,15 +30,30 @@ export function iceGatheringDone(pc: RTCPeerConnection, timeoutMs = 4000): Promi
 
 /** Messages on the "ctl" data channel. */
 export type BankToCustomer =
-  | { t: 'capture'; label: string; area: 'EXTERIOR' | 'INTERIOR'; floor?: string }
+  /** Take a photo on the phone. tray = a free snap the bank places on a view later; rid is echoed back. */
+  | { t: 'capture'; rid?: string; tray?: boolean; label: string; area: 'EXTERIOR' | 'INTERIOR'; floor?: string }
   | { t: 'say'; text: string }
   | { t: 'flip' };
 
+export type Facing = 'environment' | 'user';
+
 export type CustomerToBank =
   | { t: 'geo'; lat: number; lng: number; acc: number; at: string }
-  | { t: 'photo-ok'; label: string; thumb?: string; lat: number; lng: number; acc: number; at: string }
-  | { t: 'photo-err'; label: string; message: string }
-  | { t: 'status'; text: string };
+  | { t: 'photo-ok'; rid?: string; label: string; thumb?: string; lat: number; lng: number; acc: number; at: string }
+  | { t: 'photo-err'; rid?: string; label: string; message: string }
+  | { t: 'status'; text: string }
+  /** The customer's own call controls: mic on/off and which camera is live. */
+  | { t: 'media'; mic: boolean; facing: Facing };
+
+/** mm:ss (or h:mm:ss) since a start time. */
+export function callClock(startMs: number | null, nowMs: number): string {
+  if (startMs === null) return '0:00';
+  const s = Math.max(0, Math.floor((nowMs - startMs) / 1000));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = String(s % 60).padStart(2, '0');
+  return h ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
+}
 
 export async function sha256Hex(data: ArrayBuffer): Promise<string> {
   const d = await crypto.subtle.digest('SHA-256', data);

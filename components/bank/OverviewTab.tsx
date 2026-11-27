@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { ArrowRight, Check, Copy, KeyRound, MapPin, Smartphone } from 'lucide-react';
+import { assignedSnapshots } from '@/lib/domain/catalog';
 import type { Evaluation } from '@/lib/engines/evaluate';
 import type { AppCtl } from '@/lib/client/useApplication';
 import { metres } from '@/lib/engines/format';
@@ -113,7 +114,7 @@ export default function OverviewTab({ ctl, ev, created, go }: { ctl: AppCtl; ev:
             )}
             <div className="flex items-center justify-between">
               <span className="text-slate-600">Snapshots captured</span>
-              <span className="font-semibold">{a.inspection.snapshots.length}</span>
+              <span className="font-semibold">{assignedSnapshots(a.inspection.snapshots).length}</span>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-slate-600">Calls</span>

@@ -5,7 +5,7 @@
 import { jsPDF } from 'jspdf';
 import autoTable, { type RowInput } from 'jspdf-autotable';
 import type { Application } from '@/lib/domain/types';
-import { OCCUPANCY_LABEL, PROPERTY_TYPE_LABEL, STRUCTURE_LABEL, USAGE_LABEL } from '@/lib/domain/catalog';
+import { assignedSnapshots, OCCUPANCY_LABEL, PROPERTY_TYPE_LABEL, STRUCTURE_LABEL, USAGE_LABEL } from '@/lib/domain/catalog';
 import type { Evaluation } from '@/lib/engines/evaluate';
 import { CATEGORY_LABEL, KIND_LABEL } from '@/lib/engines/evidence';
 import { VERDICT_LABEL } from '@/lib/engines/sanity';
@@ -131,15 +131,15 @@ export async function downloadReport(a: Application, ev: Evaluation) {
 
   heading('6. Site inspection (video call)');
   table(null, [['Geo-fence', ev.geofence.summary]]);
-  if (a.inspection.snapshots.length) {
+  if (assignedSnapshots(a.inspection.snapshots).length) {
     table(
       ['View', 'Taken', 'GPS', 'Distance', 'Status'],
-      a.inspection.snapshots.map((s) => {
+      assignedSnapshots(a.inspection.snapshots).map((s) => {
         const f = ev.geofence.perSnapshot[s.id];
         return [s.label, new Date(s.takenAt).toLocaleString('en-IN'), s.lat !== null ? `${s.lat.toFixed(5)}, ${s.lng!.toFixed(5)} (±${s.accuracyM} m)` : 'none', f?.distanceM != null ? `${Math.round(f.distanceM)} m` : '-', f?.status ?? '-'];
       }),
     );
-    const thumbs = a.inspection.snapshots.filter((s) => s.thumb.startsWith('data:image/jpeg')).slice(0, 8);
+    const thumbs = assignedSnapshots(a.inspection.snapshots).filter((s) => s.thumb.startsWith('data:image/jpeg')).slice(0, 8);
     if (thumbs.length) {
       if (y > 230) {
         doc.addPage();

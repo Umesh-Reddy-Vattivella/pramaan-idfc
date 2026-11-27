@@ -1,9 +1,9 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { Plus, Ruler, Trash2 } from 'lucide-react';
+import { Plus, Ruler, Trash2, Undo2 } from 'lucide-react';
 import type { Occupancy, Room, RoomMethod, Usage } from '@/lib/domain/types';
-import { floorNames, isBuilt, OCCUPANCY_LABEL, ROOM_METHOD_LABEL, USAGE_LABEL } from '@/lib/domain/catalog';
+import { assignedSnapshots, floorNames, isBuilt, OCCUPANCY_LABEL, ROOM_METHOD_LABEL, USAGE_LABEL } from '@/lib/domain/catalog';
 import type { Evaluation } from '@/lib/engines/evaluate';
 import { metres, pct, sqft } from '@/lib/engines/format';
 import { CARPET_TO_BUA, roomArea } from '@/lib/engines/measure';
@@ -20,24 +20,25 @@ const FENCE_LABEL: Record<string, string> = { INSIDE: 'At property', NEAR: 'Near
 
 function Snapshots({ ctl, ev, onMeasure }: { ctl: AppCtl; ev: Evaluation; onMeasure: (id: string) => void }) {
   const a = ctl.app!;
-  const snaps = [...a.inspection.snapshots].reverse();
+  const placed = assignedSnapshots(a.inspection.snapshots);
+  const snaps = [...placed].reverse();
   const spec = useMemo(() => {
     const c: [number, number] = ev.pin ? [ev.pin.lat, ev.pin.lng] : [21.15, 79.09];
     const sp = emptySpec(c, 19);
     if (a.parcel.length >= 3) sp.polygons.push({ id: 'parcel', path: a.parcel, color: '#ffffff', fill: '#9C1D26', fillOpacity: 0.2 });
     if (ev.pin) sp.circles.push({ id: 'fence', center: c, radiusM: 25, color: '#16a34a', tooltip: 'Geo-fence base radius 25 m' });
     if (ev.pin) sp.markers.push({ id: 'pin', pos: c, color: '#9C1D26', size: 8, tooltip: 'Property pin' });
-    for (const s of a.inspection.snapshots) {
+    for (const s of placed) {
       const f = ev.geofence.perSnapshot[s.id];
       if (s.lat !== null && s.lng !== null) sp.markers.push({ id: s.id, pos: [s.lat, s.lng], color: f?.status === 'INSIDE' ? '#16a34a' : f?.status === 'NEAR' ? '#f59e0b' : '#dc2626', size: 6, tooltip: `${s.label} · ${f?.distanceM !== null && f?.distanceM !== undefined ? metres(f.distanceM) : '?'}` });
     }
     return sp;
-  }, [a.inspection.snapshots, a.parcel, ev]);
+  }, [placed, a.parcel, ev]);
 
   return (
     <Card title="Snapshots & geo-fence" subtitle={ev.geofence.summary}>
       {snaps.length === 0 ? (
-        <p className="text-sm text-slate-500">No snapshots yet. Start the video call above and capture each view.</p>
+        <p className="text-sm text-slate-500">No views placed yet. Snap during the video call above, then drag each snap onto its designated view.</p>
       ) : (
         <div className="grid gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
@@ -63,6 +64,9 @@ function Snapshots({ ctl, ev, onMeasure }: { ctl: AppCtl; ev: Evaluation; onMeas
                     <div className="flex gap-1">
                       <button className="btn-ghost px-1.5 py-1 text-[11px]" onClick={() => onMeasure(s.id)}>
                         <Ruler className="h-3 w-3" /> Measure
+                      </button>
+                      <button className="btn-ghost px-1.5 py-1 text-[11px]" title="Send back to the snap tray" onClick={() => ctl.run({ op: 'unassignSnapshot', id: s.id })}>
+                        <Undo2 className="h-3 w-3" />
                       </button>
                       <button className="btn-ghost px-1.5 py-1 text-[11px] text-red-600" onClick={() => ctl.run({ op: 'deleteSnapshot', id: s.id })}>
                         <Trash2 className="h-3 w-3" />
@@ -239,7 +243,7 @@ export default function InspectTab({ ctl, ev }: { ctl: AppCtl; ev: Evaluation })
   return (
     <div className="space-y-5">
       {!a.inspection.locationOn && <Notice tone="amber">The customer has not switched on location sharing yet. They will be asked for location when they answer the call.</Notice>}
-      <VideoCall app={a} onChange={ctl.refresh} />
+      <VideoCall ctl={ctl} />
       <Snapshots ctl={ctl} ev={ev} onMeasure={(id) => setTool({ initial: id })} />
       {isBuilt(a.property.type) && (
         <>
