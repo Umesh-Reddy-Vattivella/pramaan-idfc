@@ -298,7 +298,7 @@ export default function ValuationTab({ ctl, ev }: { ctl: AppCtl; ev: Evaluation 
         }
         actions={
           <button className="btn-primary" onClick={fetchLive} disabled={fetching || !ev.pin}>
-            {fetching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Globe2 className="h-4 w-4" />} {fetching ? 'Searching (up to 60 s)…' : m.fetchedAt ? 'Fetch again' : 'Fetch market evidence'}
+            {fetching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Globe2 className="h-4 w-4" />} {fetching ? 'Searching (can take a few minutes)…' : m.fetchedAt ? 'Fetch again' : 'Fetch market evidence'}
           </button>
         }
       >

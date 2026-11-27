@@ -51,6 +51,9 @@ const str = (v: unknown, max = 200) => (typeof v === 'string' && v.trim() && v.t
 const monthOf = (d?: string) => d?.match(/^\d{4}-\d{2}/)?.[0];
 const thisMonth = () => new Date().toISOString().slice(0, 7);
 
+/** Time budget for one market fetch; the route's maxDuration is 300 s. */
+export const MARKET_BUDGET = { geminiMs: 210_000, geocodeTrimMs: 230_000, geocodeStopMs: 265_000 };
+
 export interface MarketQuery {
   lat: number;
   lng: number;
@@ -225,7 +228,7 @@ export async function fetchMarketEvidence(q: MarketQuery): Promise<MarketEvidenc
   const geminiKey = process.env.GEMINI_API_KEY;
   if (geminiKey) {
     try {
-      const r = await geminiChat(geminiKey, SYSTEM, prompt(where, query, sources), { json: true, deadline: started + 40000 });
+      const r = await geminiChat(geminiKey, SYSTEM, prompt(where, query, sources), { json: true, deadline: started + MARKET_BUDGET.geminiMs });
       const parsed = extractJson(r.text);
       points = validate(Array.isArray(parsed) ? parsed : [], sources, query, rejected);
       model = `Tavily search + ${r.model} (copy-only extraction)`;
@@ -237,10 +240,10 @@ export async function fetchMarketEvidence(q: MarketQuery): Promise<MarketEvidenc
 
   // Geocode distinct localities (Nominatim, ≤ 1 req/s) so distance from the pin can be measured.
   const region = [city, state].filter(Boolean).join(', ');
-  const locs = [...new Set(points.map((p) => p.locality).filter((x): x is string => !!x))].slice(0, Date.now() - started > 42000 ? 2 : 6);
+  const locs = [...new Set(points.map((p) => p.locality).filter((x): x is string => !!x))].slice(0, Date.now() - started > MARKET_BUDGET.geocodeTrimMs ? 2 : 6);
   const coords = new Map<string, { lat: number; lng: number }>();
   for (const l of locs) {
-    if (Date.now() - started > 54000) break;
+    if (Date.now() - started > MARKET_BUDGET.geocodeStopMs) break;
     try {
       const qq = city && l.toLowerCase().includes(city.toLowerCase()) ? l : `${l}${region ? `, ${region}` : ''}`;
       const hit = (await geocodeSearch(qq, 1))[0];

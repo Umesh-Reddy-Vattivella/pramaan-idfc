@@ -7,7 +7,7 @@ import { fetchMarketEvidence } from '@/lib/server/market';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 export async function POST(_req: Request, ctx: { params: Promise<{ id: string }> }) {
   if (!(await bankSession())) return fail('Please sign in', 401);

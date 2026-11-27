@@ -5,8 +5,11 @@
    client code: the key is a server secret (GEMINI_API_KEY).
    ------------------------------------------------------------------ */
 
-/** Auto-updating aliases, so the chain does not break when Google retires a version. */
-export const GEMINI_CHAIN = ['gemini-flash-latest', 'gemini-flash-lite-latest'];
+/** Default: Gemini 4 Hydrogen (thinking model). Fallbacks are auto-updating Flash aliases. */
+export const GEMINI_DEFAULT_MODEL = 'gemini-4-hydrogen';
+export const GEMINI_CHAIN = [GEMINI_DEFAULT_MODEL, 'gemini-flash-latest', 'gemini-flash-lite-latest'];
+/** Longest a single model attempt may run (thinking models need time on 20 search results). */
+export const GEMINI_ATTEMPT_TIMEOUT_MS = 150_000;
 
 export function geminiChain(): string[] {
   const preferred = process.env.GEMINI_MODEL?.trim();
@@ -28,13 +31,18 @@ interface GeminiResponse {
 
 /**
  * @param json ask for a JSON response (responseMimeType application/json).
- * @param deadline epoch ms after which no further model is tried (keeps the route under the 60 s serverless limit).
+ * @param deadline epoch ms after which no further model is tried (keeps the route under its serverless limit).
  */
-export async function geminiChat(apiKey: string, system: string, user: string, { json = false, deadline = Date.now() + 35000, chain = geminiChain() }: { json?: boolean; deadline?: number; chain?: string[] } = {}): Promise<{ model: string; text: string }> {
+export async function geminiChat(
+  apiKey: string,
+  system: string,
+  user: string,
+  { json = false, deadline = Date.now() + 180_000, attemptTimeoutMs = GEMINI_ATTEMPT_TIMEOUT_MS, chain = geminiChain() }: { json?: boolean; deadline?: number; attemptTimeoutMs?: number; chain?: string[] } = {},
+): Promise<{ model: string; text: string }> {
   const attempts: GeminiError['attempts'] = [];
   for (const model of chain) {
     const remaining = deadline - Date.now();
-    if (remaining < 4000) {
+    if (remaining < 8000) {
       attempts.push({ model, status: 0, message: 'time budget exhausted' });
       break;
     }
@@ -45,9 +53,9 @@ export async function geminiChat(apiKey: string, system: string, user: string, {
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: system }] },
           contents: [{ role: 'user', parts: [{ text: user }] }],
-          generationConfig: { temperature: 0, maxOutputTokens: 8192, ...(json ? { responseMimeType: 'application/json' } : {}) },
+          generationConfig: { temperature: 0, maxOutputTokens: 32768, ...(json ? { responseMimeType: 'application/json' } : {}) },
         }),
-        signal: AbortSignal.timeout(Math.min(30000, remaining)),
+        signal: AbortSignal.timeout(Math.min(attemptTimeoutMs, remaining)),
       });
       const j = (await res.json().catch(() => ({}))) as GeminiResponse;
       if (!res.ok || j.error) {

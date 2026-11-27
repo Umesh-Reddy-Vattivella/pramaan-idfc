@@ -23,7 +23,7 @@ export async function tavilySearch(apiKey: string, query: string, opts: { maxRes
       include_answer: false,
       include_raw_content: false,
     }),
-    signal: AbortSignal.timeout(25000),
+    signal: AbortSignal.timeout(45000),
   });
   if (!res.ok) {
     const body = await res.text().catch(() => '');
