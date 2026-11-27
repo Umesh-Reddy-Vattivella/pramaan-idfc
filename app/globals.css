@@ -1,79 +1,64 @@
 @import "tailwindcss";
 
-/* ------------------------------------------------------------------
-   PRAMAAN — IDFC FIRST Bank Visual Brand System (PRD §6.1)
-   ------------------------------------------------------------------ */
+/* PRAMAAN v3 — IDFC FIRST Bank palette */
 :root {
-  /* Brand */
   --idfc-maroon: #9c1d26;
   --idfc-maroon-deep: #6e1118;
-  --idfc-canvas: #faf8f8;
-  --idfc-surface: #ffffff;
+  --idfc-canvas: #f7f5f5;
   --idfc-ink: #1e293b;
-
-  /* Semantic status (text on background) */
-  --status-instant-fg: #15803d;
-  --status-instant-bg: #dcfce7;
-  --status-remote-fg: #b45309;
-  --status-remote-bg: #fef3c7;
-  --status-critical-fg: #dc2626;
-  --status-critical-bg: #fee2e2;
 }
 
 @theme inline {
   --color-maroon: var(--idfc-maroon);
   --color-maroon-deep: var(--idfc-maroon-deep);
   --color-canvas: var(--idfc-canvas);
-  --color-surface: var(--idfc-surface);
   --color-ink: var(--idfc-ink);
-
-  --color-instant: var(--status-instant-fg);
-  --color-instant-bg: var(--status-instant-bg);
-  --color-remote: var(--status-remote-fg);
-  --color-remote-bg: var(--status-remote-bg);
-  --color-critical: var(--status-critical-fg);
-  --color-critical-bg: var(--status-critical-bg);
-
   --font-sans: var(--font-geist-sans), Inter, ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;
 }
 
+@layer components {
+  .card {
+    @apply rounded-2xl border border-slate-200 bg-white shadow-sm;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 bg-maroon text-white hover:bg-maroon-deep;
+  }
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 border border-slate-300 bg-white text-slate-700 hover:bg-slate-50;
+  }
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 text-slate-600 hover:bg-slate-100;
+  }
+  .btn-green {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 bg-emerald-600 text-white hover:bg-emerald-700;
+  }
+  .btn-red {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 bg-red-600 text-white hover:bg-red-700;
+  }
+  .input {
+    @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-ink outline-none placeholder:text-slate-400 focus:border-maroon focus:ring-2 focus:ring-maroon/15;
+  }
+  .label {
+    @apply mb-1 block text-xs font-semibold text-slate-600;
+  }
+  .th {
+    @apply px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500;
+  }
+  .td {
+    @apply border-t border-slate-100 px-3 py-2 align-top text-sm;
+  }
+}
+
+html,
 body {
   background: var(--idfc-canvas);
   color: var(--idfc-ink);
-  font-family: var(--font-sans);
-  /* Banking-terminal numeric alignment on all figures (PRD §6.1) */
-  font-variant-numeric: tabular-nums;
 }
 
-@layer components {
-  .card {
-    @apply rounded-xl border border-slate-200 bg-surface shadow-sm;
-  }
-
-  .badge {
-    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold tabular-nums;
-  }
-  .badge-instant {
-    @apply bg-instant-bg text-instant;
-  }
-  .badge-remote {
-    @apply bg-remote-bg text-remote;
-  }
-  .badge-critical {
-    @apply bg-critical-bg text-critical;
-  }
-  .input {
-    @apply w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs text-ink tabular-nums focus:border-maroon focus:outline-none;
-  }
-}
-
-/* Offline fallback styling for map tiles (DoD: only tiles need fallback when Wi-Fi drops) */
 .leaflet-container {
-  background-color: #e2e8f0;
-  background-image: linear-gradient(45deg, rgba(148, 163, 184, 0.18) 25%, transparent 25%, transparent 75%, rgba(148, 163, 184, 0.18) 75%),
-    linear-gradient(45deg, rgba(148, 163, 184, 0.18) 25%, transparent 25%, transparent 75%, rgba(148, 163, 184, 0.18) 75%);
-  background-size: 24px 24px;
-  background-position: 0 0, 12px 12px;
-  font-family: var(--font-sans);
+  font: inherit;
 }

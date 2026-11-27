@@ -7,9 +7,7 @@
     "build": "next build --turbopack",
     "start": "next start",
     "lint": "eslint",
-    "verify": "tsx scripts/verify-engines.ts",
-    "prebuild": "node scripts/copy-pdf-worker.mjs",
-    "predev": "node scripts/copy-pdf-worker.mjs"
+    "verify": "tsx scripts/verify.ts"
   },
   "dependencies": {
     "jspdf": "^4.2.1",

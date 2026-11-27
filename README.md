@@ -1,39 +1,30 @@
-# PRAMAAN — IDFC FIRST Bank LAP Valuation Prototype (FAME 6.0)
+# PRAMAAN v3: IDFC FIRST Bank LAP technical valuation
 
-Evidence-backed, confidence-gated property valuation for Loan Against Property: owner self-capture with an anti-fraud Trust Layer, 3 deterministic engines (Measure · Price · Usage), Auto-QC, a Risk Cascade (Instant / Remote Review / Physical Check), an auto-generated IDFC Technical Appraisal Report PDF and simulated remote valuer e-sign.
+This is a two-portal prototype built around the mentors' three pillars: **Identification → Measurement → Valuation**. The full specification is in [PRD_V3.md](PRD_V3.md).
 
-> **All valuation math, Authenticity Scoring, Auto-QC and routing are pure TypeScript functions in `lib/engines/`.** The optional vision LLM only extracts printed values; it never computes figures.
-
-## Screens
-
-| Tab | Route | What it shows |
+| Portal | Login | What it does |
 |---|---|---|
-| 1 · Portfolio Command Center | `/` | KPI strip, filterable case queue, ROI simulator, Live AI upload |
-| 2 · Owner Self-Capture | `/capture` | 390px mobile simulator (Owner App / WhatsApp Rep link), live Trust telemetry, 3 one-click fraud simulations |
-| 3 · Underwriter Workbench | `/cases/[id]` | Sticky decision header, Measure & GIS map, Price triangulation + Authenticity gauge + live stress-test, Usage & Trust, Auto-QC legacy audit, click-any-number Evidence Drawer |
-| 4 · Report & e-Sign | `/cases/[id]/report` | IDFC Technical Appraisal Report, 1-click PDF, RBI Phase 1 remote valuer OTP e-sign |
+| **Bank** (`/bank`) | Employee ID + password (default `Bank@2026`) | Opens applications from the loan file and manages a per-document upload checklist (verify or reject). Confirms the pin, draws the plot boundary and enters plan and title facts. Runs the **video inspection call**: captures snapshots from the customer's camera with GPS and checks them against the geo-fence. Measures rooms on snapshots, fetches **live market evidence around the pin**, shows every valuation formula with its numbers, runs the technical checks and issues the report as a PDF. |
+| **Customer** (`/customer`) | Application no. + password (default `Customer@2026`) | Shows status only, never valuation figures. Lets the customer upload the documents asked of them, turn on location and answer the bank's video call. |
 
-Seeded cases: a clean Instant showcase (Nagpur) plus digital reconstructions of 3 IDFC sample reports — R1 Dehradun residential, R2 Dehradun commercial, R3 Coimbatore residential.
+There is no repeat KYC: identity was verified at loan onboarding. Geo-tagging proves the photos were taken **at the property**, whoever holds the phone.
 
-## Run locally
+## Run
 
 ```bash
 npm install
-npm run dev        # http://localhost:3000
-npm run verify     # asserts the PRD §7.1 Definition-of-Done figures (60 checks)
+cp .env.example .env.local   # optional keys: Supabase, Tavily/OpenRouter, Google Maps, TURN
+npm run dev                  # http://localhost:3000
+npm run verify               # deterministic engine checks
 npm run build
 ```
 
-Works fully offline in Demo Mode — only map tiles need a network connection.
+Without Supabase or KV, data is kept in memory, which only works for local runs. The camera and location need HTTPS, or `localhost`.
 
-## Optional: Live Vision AI extraction
+## Rules
 
-Copy `.env.example` to `.env.local` and set `GEMINI_API_KEY` (optional `GEMINI_MODEL`, default `gemini-2.5-flash`). Without a key, `POST /api/analyze-live` runs in **Simulated Extraction Mode**.
+- All valuation maths, scores, checks and progress live in pure TypeScript under `lib/engines/`. The LLM only copies printed figures from cited search results.
+- There are no seeded or invented applications, comparables or rates. Default corrections and policy constants are labelled wherever they are shown.
+- Checks that have no public data source (demolition list, road widening) stay pending until a bank user records the result.
 
-## Stack
-
-Next.js 15 (App Router) · React 19 · TypeScript (strict) · Tailwind CSS v4 · lucide-react · Recharts · Leaflet / react-leaflet (Esri World Imagery + OpenStreetMap, loaded with `ssr: false`) · jsPDF + jspdf-autotable · React Context + localStorage.
-
-## Disclaimer
-
-Prototype for demonstration. Valuer identities and e-sign are simulated; it is not a legally valid digital signature or a production valuation system.
+The previous version (v2) is in git history and in the sibling folder `pramaan-idfc-backup-v2-2026-11-27`.

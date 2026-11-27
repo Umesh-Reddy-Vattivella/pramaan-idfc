@@ -2,20 +2,37 @@
 
 **Window:** 26 Nov → 28 Nov 2026 (2 days). **Source:** mentor review transcript (Rajesh, Ravi).
 
-> **Status (26 Nov): P0 + P1 implemented in one pass.** `npm run build` clean, `npm run verify` 160/160 (133 original + 27 new).
->
-> | Item | Where |
-> |---|---|
-> | Sanity engine (13 checks, 3 pillars, verdict, upfront actions) | `lib/engines/sanity.ts`, tab `components/workbench/SanityTab.tsx`, PDF §8/9, report page |
-> | Geo-fence (replaces KYC) | `lib/engines/geofence.ts`; KYC/face-match removed from trust layer, data and UI |
-> | LOS record + document checklist | `lib/data/losRecords.ts`, simulated gov adapters `lib/data/govRecords.ts` |
-> | Customer link `/c/[token]` (EN/हिंदी, geo-tagged photos, rooms via AR / tape / reference photo) | `app/c/[token]/page.tsx`, `components/customer/*` |
-> | Link backend (KV or in-memory) | `app/api/links/*`, `lib/server/linkStore.ts` |
-> | Bank side: Valuation Links queue + demo LOS entry at your location; Send-link panel (QR / WhatsApp / live status) | `app/capture/page.tsx`, `components/workbench/CustomerLinkPanel.tsx` |
-> | Workbench pillars: Sanity · ① Identify · ② Measure · ③ Value · Usage & Trust · Auto-QC | `app/cases/[id]/page.tsx`, `components/workbench/IdentifyTab.tsx` |
-> | Form cleanup + residual-life formula | `app/value/page.tsx`, `lib/engines/valuation.ts#residualLife` |
->
-> **Before the demo:** on Vercel add the free *Upstash for Redis* integration (injects `KV_REST_API_URL` / `KV_REST_API_TOKEN`), then redeploy — otherwise the phone's submission may not reach the laptop. Rehearse on the real phone: location permission, camera, AR (Android Chrome + ARCore only; iPhone uses tape / reference photo).
+> **Status (27 Nov).** Two portals, shared case file in a database, live video verification call, no fabricated data. `npm run build` clean, `npm run verify` 158/158.
+
+## 0. End-to-end journey → valuation → final report (current target)
+
+Every number in a customer case comes from what the bank or customer entered, uploaded or captured, or from sourced market evidence. Examples (IDFC R1–R3 reconstructions, Case 1) stay, labelled **EXAMPLE**.
+
+| # | Step | Who | Where | Output | Status |
+|---|------|-----|-------|--------|--------|
+| 1 | Open case: borrower, mobile, property type, pin | Bank | `/bank/new` step 1 | Valuation case + shared case file (DB) | ✅ |
+| 2 | Suggested document checklist; each doc uploaded singly by whoever has it | Bank ⇄ Customer | `/bank/new` step 2, workbench ① Identify, `/customer` | Files in DB storage, verify / ask-again loop | ✅ |
+| 3 | Customer access: link + OTP (or access code), no KYC | Customer | `/c/<token>` → `/customer/login` | Session | ✅ (OTP shown on screen until an SMS gateway is set) |
+| 4 | Location permission + live location trail | Customer | `/customer` "Turn on location" | `locationTrack` in case file | ✅ |
+| 5 | **Live video verification call**: bank rings in-app → customer allows location + camera → bank directs shots → photo taken on customer's phone with GPS + hash | Bank ⇄ Customer | workbench ① Identify "Call customer" / customer ring screen | Geo-tagged full-res photos, geo-fence verdict | ✅ (TURN server needed for some mobile networks) |
+| 5b | Self-paced alternative: photos + room sizes without a call | Customer | `/customer/capture` | Same as 5 + room measurements | ✅ |
+| 6 | Measurement cross-check vs approved plan | Engine | ② Measure, Sanity S5/S6 | Deviation, FSI | ✅ |
+| 7 | **Market evidence** (live web search with quoted sources, or valuer-entered comparables with source URL) | Bank | ③ Value → Market evidence | Weighted price sources | ✅ (valuation stays *Pending* until this is done) |
+| 8 | Valuation (land + building, FSV, LTV) — pure TS engines | Engine | Header, ③ Value | MV / FSV / max loan | ✅ |
+| 9 | Technical Sanity Report — remarks + upfront actions; unconnected government feeds stay PENDING (never assumed) | Engine | Sanity tab | Mortgageability verdict | ✅ |
+| 10 | **Final report** + registered-valuer e-sign (blocked while valuation pending / physical route) | Bank | `/cases/<id>/report`, PDF | Signed report | ✅ (draft watermark until 7 is done) |
+
+**Not yet (next):** real SMS gateway for OTP; staff sign-in for the bank portal; government feeds (ULB notices, DP road widening, land records); OCR auto-fill of checklist uploads into case fields; recording / consent log of the video call.
+
+**Setup for the live demo**
+1. Supabase (free): create project → SQL editor → run `supabase/schema.sql` → set `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` on Vercel.
+2. `PORTAL_SESSION_SECRET` = long random string.
+3. TURN (free tier, e.g. metered.ca Open Relay) → `TURN_URLS`, `TURN_USERNAME`, `TURN_CREDENTIAL` — without it calls can fail between a mobile network and an office network.
+4. `TAVILY_API_KEY` + `OPENROUTER_API_KEY` for live market evidence.
+5. Rehearse: bank laptop opens case → customer phone signs in → allow location → bank "Call customer" → customer answers → capture 4 exterior + 1 interior per floor → fetch market evidence → Sanity → report.
+
+---
+*Earlier plan (26 Nov) below for reference.*
 
 ## 1. What the mentors actually said (distilled)
 
