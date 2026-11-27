@@ -98,6 +98,45 @@ export function extractRatesFromText(text: string): { rateText: string; rate: nu
   return out;
 }
 
+/** Area units offered on the registered-sale form → sqft per unit. */
+export const AREA_UNITS = {
+  SQFT: { label: 'sq ft', sqft: 1 },
+  SQM: { label: 'sq m (चौ.मी.)', sqft: 10.7639 },
+  SQYD: { label: 'sq yd / gaj', sqft: 9 },
+  GUNTHA: { label: 'guntha (गुंठा)', sqft: 1089 },
+  ACRE: { label: 'acre', sqft: 43560 },
+  HECTARE: { label: 'hectare (हेक्टर)', sqft: 107639 },
+} as const;
+export type AreaUnit = keyof typeof AREA_UNITS;
+
+/** value × sqft-per-unit, rounded to 0.01 sqft; null for non-positive input. */
+export function areaToSqft(value: number, unit: AreaUnit): number | null {
+  if (!Number.isFinite(value) || value <= 0) return null;
+  return Math.round(value * AREA_UNITS[unit].sqft * 100) / 100;
+}
+
+/**
+ * Printed Indian date → YYYY-MM-DD: "12/03/2025", "12-03-2025", "12.03.2025", "2025-03-12",
+ * Devanagari digits allowed. Day-first (Indian convention). Null if unparseable or impossible.
+ */
+export function parseIndianDate(text: string | undefined | null): string | null {
+  if (!text) return null;
+  const t = normaliseDigits(text).trim();
+  let y: number, mo: number, d: number;
+  let m = t.match(/(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  if (m) [y, mo, d] = [+m[1], +m[2], +m[3]];
+  else {
+    m = t.match(/(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})/);
+    if (!m) return null;
+    [d, mo, y] = [+m[1], +m[2], +m[3]];
+    if (y < 100) y += 2000;
+  }
+  if (y < 1950 || y > 2100 || mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  if (dt.getUTCMonth() !== mo - 1) return null;
+  return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+}
+
 /** Months between a printed date (YYYY, YYYY-MM or YYYY-MM-DD) and now; null if unparseable. */
 export function monthsSince(date: string | undefined, now: Date): number | null {
   if (!date) return null;

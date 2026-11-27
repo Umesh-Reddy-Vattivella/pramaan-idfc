@@ -363,10 +363,26 @@ export function applyBankOp(a: Application, o: BankOp, user: string) {
       const price = num(p.priceInr, 1, 1e11);
       const area = num(p.areaSqft, 1, 1e8);
       if (!rate && !(price && area)) throw new Error('Enter a rate, or a price and an area');
+      const cat = (['LAND', 'BUILT', 'GUIDELINE'] as const).includes(p.category) ? p.category : 'LAND';
+      const kind = cat === 'GUIDELINE' ? 'GUIDELINE' : (['SALE', 'LISTING', 'AUCTION'] as const).includes(p.kind as 'SALE') ? p.kind : 'SALE';
+      const rg = p.registration;
+      const registration =
+        kind === 'SALE' && rg
+          ? {
+              docNo: txt(rg.docNo, 60),
+              office: txt(rg.office, 120),
+              regDate: /^\d{4}-\d{2}-\d{2}$/.test(String(rg.regDate ?? '')) ? rg.regDate : undefined,
+              considerationInr: num(rg.considerationInr, 1, 1e11) ?? undefined,
+              govtValueInr: num(rg.govtValueInr, 1, 1e11) ?? undefined,
+              fileId: /^[0-9a-f-]{36}$/.test(String(rg.fileId ?? '')) ? rg.fileId : undefined,
+            }
+          : undefined;
+      const au = p.auction;
+      const auction = kind === 'AUCTION' && au ? { platform: (['BAANKNET', 'IBAPI'] as const).includes(au.platform as 'BAANKNET') ? au.platform : ('OTHER' as const), auctionDate: /^\d{4}-\d{2}-\d{2}$/.test(String(au.auctionDate ?? '')) ? au.auctionDate : undefined } : undefined;
       a.market.points.push({
         id: `m-${randomUUID().slice(0, 8)}`,
-        category: p.category,
-        kind: p.kind,
+        category: cat,
+        kind,
         ratePerSqft: rate ?? undefined,
         priceInr: price ?? undefined,
         areaSqft: area ?? undefined,
@@ -377,10 +393,13 @@ export function applyBankOp(a: Application, o: BankOp, user: string) {
         title: txt(p.title, 160) || 'Manual comparable',
         lat: num(p.lat, -90, 90) ?? undefined,
         lng: num(p.lng, -180, 180) ?? undefined,
+        quote: txt(p.quote, 300),
         origin: 'MANUAL',
         included: true,
+        registration,
+        auction,
       });
-      log(a, 'BANK', `Manual comparable added (${p.category.toLowerCase()})`);
+      log(a, 'BANK', registration ? `Registered sale added from Index II${registration.docNo ? ` (doc ${registration.docNo})` : ''}` : `Manual comparable added (${cat.toLowerCase()})`);
       return;
     }
     case 'deletePoint':

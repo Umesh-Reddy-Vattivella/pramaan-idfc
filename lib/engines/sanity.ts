@@ -4,7 +4,7 @@
    ------------------------------------------------------------------ */
 import type { Application, DocSlot } from '@/lib/domain/types';
 import { isBuilt, USAGE_LABEL } from '@/lib/domain/catalog';
-import type { EvidenceResult } from './evidence';
+import { registrationCheck, type EvidenceResult } from './evidence';
 import type { GeofenceResult } from './geofence';
 import { MIN_EXTERIOR_SNAPSHOTS } from './geofence';
 import type { MeasureResult } from './measure';
@@ -202,7 +202,7 @@ export function runSanity(a: Application, m: MeasureResult, g: GeofenceResult, e
     title: 'Market evidence depth',
     status: !primary ? 'PENDING' : primary.n < MIN_COMPARABLES || primary.score.total < MIN_SCORE ? 'WARN' : 'PASS',
     finding: !primary ? 'No market evidence applied yet.' : `${primary.n} usable comparable(s); Authenticity Score ${primary.score.total}/100.`,
-    action: !primary ? 'Fetch market evidence around the property (Valuation tab).' : primary.n < MIN_COMPARABLES || primary.score.total < MIN_SCORE ? 'Add registered sales / auction comparables near the property.' : undefined,
+    action: !primary ? 'Fetch market evidence around the property (Valuation tab).' : primary.n < MIN_COMPARABLES || primary.score.total < MIN_SCORE ? 'Add registered sales (Index II) near the property; BAANKNET auction listings help as a cross-check.' : undefined,
   });
 
   // T14 guideline floor
@@ -224,6 +224,21 @@ export function runSanity(a: Application, m: MeasureResult, g: GeofenceResult, e
       status: v.residualLife >= MIN_RESIDUAL_LIFE ? 'PASS' : 'WARN',
       finding: `${v.residualLife} years (economic life ${v.totalLife} − age ${a.property.ageYears}).`,
       action: v.residualLife < MIN_RESIDUAL_LIFE ? `Below ${MIN_RESIDUAL_LIFE} years — restrict loan tenure to the residual life.` : undefined,
+    });
+  }
+
+  // T17 registered sales: consideration vs government value on the same deed
+  const rc = registrationCheck(ev.assessed);
+  if (rc.compared) {
+    const worst = rc.below.reduce<(typeof rc.below)[number] | null>((w, x) => (!w || x.ratio < w.ratio ? x : w), null);
+    c.push({
+      id: 'T17',
+      title: 'Registered sales vs government value',
+      status: rc.below.length ? 'WARN' : 'PASS',
+      finding: rc.below.length
+        ? `${rc.below.length} of ${rc.compared} registered sale(s) declare a price below the government value on the deed (lowest ${Math.round(worst!.ratio * 100)}%: ${worst!.title}).`
+        : `All ${rc.compared} registered sale(s) declare a price at or above the government value.`,
+      action: rc.below.length ? 'Possible under-declaration — confirm these sales or exclude them from the rate.' : undefined,
     });
   }
 

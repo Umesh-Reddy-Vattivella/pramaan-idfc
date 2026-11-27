@@ -11,7 +11,7 @@ export interface SearchResult {
   query: string;
 }
 
-export async function tavilySearch(apiKey: string, query: string, opts: { maxResults?: number; depth?: 'basic' | 'advanced' } = {}): Promise<SearchResult[]> {
+export async function tavilySearch(apiKey: string, query: string, opts: { maxResults?: number; depth?: 'basic' | 'advanced'; includeDomains?: string[] } = {}): Promise<SearchResult[]> {
   const res = await fetch('https://api.tavily.com/search', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
@@ -22,8 +22,9 @@ export async function tavilySearch(apiKey: string, query: string, opts: { maxRes
       country: 'india',
       include_answer: false,
       include_raw_content: false,
+      ...(opts.includeDomains?.length ? { include_domains: opts.includeDomains } : {}),
     }),
-    signal: AbortSignal.timeout(45000),
+    signal: AbortSignal.timeout(20000),
   });
   if (!res.ok) {
     const body = await res.text().catch(() => '');
@@ -36,8 +37,8 @@ export async function tavilySearch(apiKey: string, query: string, opts: { maxRes
 }
 
 /** Runs several searches in parallel; failed searches are reported, not thrown. De-duplicates by URL. */
-export async function tavilyMulti(apiKey: string, queries: { q: string; depth?: 'basic' | 'advanced'; max?: number }[]) {
-  const settled = await Promise.allSettled(queries.map((x) => tavilySearch(apiKey, x.q, { depth: x.depth, maxResults: x.max })));
+export async function tavilyMulti(apiKey: string, queries: { q: string; depth?: 'basic' | 'advanced'; max?: number; domains?: string[] }[]) {
+  const settled = await Promise.allSettled(queries.map((x) => tavilySearch(apiKey, x.q, { depth: x.depth, maxResults: x.max, includeDomains: x.domains })));
   const seen = new Set<string>();
   const results: SearchResult[] = [];
   const errors: string[] = [];

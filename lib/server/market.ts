@@ -4,11 +4,13 @@
    area / rate text from numbered results → every copied number must exist
    verbatim in its source → units parsed deterministically → each locality
    geocoded so the engine can measure distance from the pin.
+   Bank e-auctions come from BAANKNET (the PSB e-auction portal) and IBAPI:
+   a domain-restricted search; reserve price + area from single-property pages.
    If the model is unavailable a regex parser extracts explicit ₹/sqft rates.
    No arithmetic is done by the model.
    ------------------------------------------------------------------ */
-import type { EvidenceCategory, EvidenceKind, MarketEvidence, MarketPoint, PropertyType, RejectedPoint } from '@/lib/domain/types';
-import { extractRatesFromText, parseAreaSqft, parseInrAmount, parseRatePerSqft, quoteInSource } from '@/lib/engines/parse';
+import type { AuctionPlatform, EvidenceCategory, EvidenceKind, MarketEvidence, MarketPoint, PropertyType, RejectedPoint } from '@/lib/domain/types';
+import { extractRatesFromText, parseAreaSqft, parseIndianDate, parseInrAmount, parseRatePerSqft, quoteInSource } from '@/lib/engines/parse';
 import { geocodeReverse, geocodeSearch } from '@/lib/live/geocode';
 import { geminiChat } from '@/lib/live/gemini';
 import { tavilyMulti, type SearchResult } from '@/lib/live/tavily';
@@ -30,6 +32,26 @@ const LAND_ASSET: Record<PropertyType, string> = {
   INDUSTRIAL: 'industrial plot land',
 };
 
+/** BAANKNET titles its pages "3851 square feet Plot for sale in Nagpur": queries mirror that wording. */
+const AUCTION_TITLE: Record<PropertyType, string> = {
+  HOUSE: 'Individual House',
+  FLAT: 'Flat',
+  PLOT: 'Plot',
+  SHOP_OFFICE: 'Shop',
+  COMMERCIAL_BUILDING: 'Commercial',
+  INDUSTRIAL: 'Industrial',
+};
+/** Bank e-auction portals searched for reserve prices. */
+export const AUCTION_DOMAINS = ['baanknet.com', 'ibapi.in'];
+/** Auction results kept for the extractor even when the other searches return many pages. */
+const MAX_AUCTION_SOURCES = 6;
+
+function auctionQueries(type: PropertyType, place: string): string[] {
+  if (!place) return [];
+  const land = type === 'HOUSE' || type === 'PLOT' || type === 'COMMERCIAL_BUILDING' || type === 'INDUSTRIAL';
+  return [...(land ? [`Plot for sale in ${place} reserve price`] : []), ...(type !== 'PLOT' ? [`${AUCTION_TITLE[type]} for sale in ${place} reserve price`] : [])];
+}
+
 const LAND_RE = /plot|land|site|\bna\b|open|bhukhand|भूखंड|प्लॉट|जमीन/i;
 const BUILT_RE = /flat|apartment|\bbhk\b|villa|bungalow|house|office|shop|showroom|penthouse|studio|builder floor|shed|warehouse|building/i;
 const MIN_RATE = 100;
@@ -47,12 +69,22 @@ const isNonProperty = (u?: string) => {
   const h = host(u);
   return !!h && NON_PROPERTY.some((d) => h === d || h.endsWith(`.${d}`));
 };
+const auctionPlatform = (u?: string): AuctionPlatform | null => {
+  const h = host(u);
+  if (!h) return null;
+  if (h === 'baanknet.com' || h.endsWith('.baanknet.com')) return 'BAANKNET';
+  if (h === 'ibapi.in' || h.endsWith('.ibapi.in')) return 'IBAPI';
+  return null;
+};
 const str = (v: unknown, max = 200) => (typeof v === 'string' && v.trim() && v.trim().toLowerCase() !== 'null' ? v.trim().slice(0, max) : undefined);
 const monthOf = (d?: string) => d?.match(/^\d{4}-\d{2}/)?.[0];
 const thisMonth = () => new Date().toISOString().slice(0, 7);
 
-/** Time budget for one market fetch; the route's maxDuration is 300 s. */
-export const MARKET_BUDGET = { geminiMs: 210_000, geocodeTrimMs: 230_000, geocodeStopMs: 265_000 };
+/** Time budget for one market fetch (ms from the start); the route's maxDuration is 90 s. */
+export const MARKET_BUDGET = { geminiMs: 60_000, geocodeTrimMs: 62_000, geocodeStopMs: 75_000 };
+/** Search results sent to the extractor (besides auction pages) and characters kept from each. */
+const MAX_SOURCES = 16;
+const SOURCE_CHARS = 800;
 
 export interface MarketQuery {
   lat: number;
@@ -81,6 +113,7 @@ Rules:
 - priceText, areaText and rateText MUST be copied character-for-character from that source's TEXT (e.g. "₹15 Lac", "1200 sqft", "₹4,500/sqft"). Include unit words exactly as printed.
 - One object per individual property or per stated rate. LISTING = for sale; SALE = completed / registered transaction; AUCTION = bank auction reserve price.
 - SKIP portal-wide "average price" summaries only if they have no locality. SKIP rentals. SKIP anything without a price or rate.
+- Pages from baanknet.com or ibapi.in are BANK AUCTION listings: kind AUCTION; priceText = the RESERVE PRICE exactly as printed (not the EMD, not the bid increment / "price during extension"); areaText = that property's area; dateText = the auction date if printed. SKIP the property if its reserve price is "N/A" or marked indicative. From a multi-property sale notice, include a property only if its own reserve price and its own area are printed together for that one property.
 - Do not include names or phone numbers. Maximum 30 objects.
 
 SEARCH RESULTS:
@@ -123,10 +156,14 @@ function validate(rows: unknown[], sources: SearchResult[], q: MarketQuery, reje
     const propertyType = str(o.propertyType, 80);
     if (!category || !kind) return rejected.push({ title: src.title, url: src.url, reason: 'Unknown evidence type' });
     if (category === 'LAND' && propertyType && BUILT_RE.test(propertyType) && !LAND_RE.test(propertyType)) category = 'BUILT';
+    const platform = auctionPlatform(src.url);
+    if (platform && category !== 'GUIDELINE') kind = 'AUCTION';
     const numeric = (s?: string) => (s && /\d/.test(s) ? s : undefined);
     const pq = numeric(str(o.priceText, 60));
     const aq = numeric(str(o.areaText, 60));
     const rq = numeric(str(o.rateText, 80));
+    const dq = numeric(str(o.dateText, 40));
+    if (platform && pq && /\bn\/a\b|indicative/i.test(pq)) return rejected.push({ title: src.title, url: src.url, reason: 'Auction reserve price not declared (N/A / indicative)' });
     for (const [label, s] of [['price', pq], ['area', aq], ['rate', rq]] as const) {
       if (s && !quoteInSource(s, `${src.title} ${src.content}`)) return rejected.push({ title: src.title, url: src.url, reason: `Quoted ${label} "${s}" not found in the source text` });
     }
@@ -145,12 +182,14 @@ function validate(rows: unknown[], sources: SearchResult[], q: MarketQuery, reje
       ratePerSqft: rate ?? undefined,
       propertyType,
       locality: str(o.locality, 100) ?? printedLocality(src, q),
-      date: monthOf(src.publishedDate) ?? (kind === 'LISTING' ? thisMonth() : undefined),
+      // A printed date (auction / registration) wins when it really is in the source; listings fall back to this month.
+      date: (dq && quoteInSource(dq, `${src.title} ${src.content}`) ? parseIndianDate(dq) : null) ?? monthOf(src.publishedDate) ?? (kind === 'LISTING' ? thisMonth() : undefined),
       url: src.url,
       title: src.title,
       quote: [pq, aq, rq].filter(Boolean).join(' · '),
       origin: 'LIVE_SEARCH',
       included: true,
+      auction: platform ? { platform, auctionDate: dq ? (parseIndianDate(dq) ?? undefined) : undefined } : undefined,
     });
   });
   return out;
@@ -164,6 +203,7 @@ function regexExtract(sources: SearchResult[], q: MarketQuery): MarketPoint[] {
     // Without an AI reader, a page counts as a guideline-rate source only if its title / URL says so —
     // listing pages often mention "circle rate" somewhere in the text.
     const guideline = /guideline|circle rate|circle-rate|ready reckoner|ready-reckoner|collector rate|dlc rate/i.test(head);
+    const platform = auctionPlatform(s.url);
     const category: EvidenceCategory = guideline ? 'GUIDELINE' : LAND_RE.test(head) && !BUILT_RE.test(head) ? 'LAND' : BUILT_RE.test(head) ? 'BUILT' : 'LAND';
     if (!guideline && !LAND_RE.test(head) && !BUILT_RE.test(head)) continue;
     extractRatesFromText(s.content)
@@ -173,7 +213,7 @@ function regexExtract(sources: SearchResult[], q: MarketQuery): MarketPoint[] {
         out.push({
           id: `live-r${out.length + 1}-${j}`,
           category,
-          kind: guideline ? 'GUIDELINE' : /auction|sarfaesi/i.test(text) ? 'AUCTION' : 'LISTING',
+          kind: guideline ? 'GUIDELINE' : platform || /auction|sarfaesi/i.test(text) ? 'AUCTION' : 'LISTING',
           ratePerSqft: m.rate,
           propertyType: `${category === 'LAND' ? 'plot / land' : category === 'BUILT' ? 'built property' : 'guideline'} (regex extraction)`,
           locality: printedLocality(s, q),
@@ -183,6 +223,7 @@ function regexExtract(sources: SearchResult[], q: MarketQuery): MarketPoint[] {
           quote: m.rateText,
           origin: 'LIVE_SEARCH',
           included: true,
+          auction: platform ? { platform } : undefined,
         });
       });
   }
@@ -214,13 +255,17 @@ export async function fetchMarketEvidence(q: MarketQuery): Promise<MarketEvidenc
     { q: `${LAND_ASSET[q.type]} for sale in ${loc} price per sq ft`, depth: 'advanced', max: 8 },
     { q: `${BUILT_ASSET[q.type]} for sale in ${loc} price per sq ft`, depth: 'advanced', max: 8 },
     { q: `${loc} ${state ?? ''} guideline value circle rate per sq ft`, depth: 'basic', max: 5 },
-    { q: `bank e-auction property ${loc} reserve price sq ft`, depth: 'basic', max: 5 },
+    // Bank auctions are sparse: search city-wide (points > 10 km from the pin are dropped by distance).
+    ...auctionQueries(q.type, city || loc).map((x) => ({ q: x, depth: 'advanced' as const, max: 8, domains: AUCTION_DOMAINS })),
   ]);
   if (!results.length) throw new Error(errors.length ? errors.join(' | ') : 'Web search returned no results');
 
   const rejected: RejectedPoint[] = [];
   for (const r of results) if (isNonProperty(r.url)) rejected.push({ title: r.title, url: r.url, reason: 'Not a property-price source (social / product catalogue)' });
-  const sources = results.filter((r) => !isNonProperty(r.url)).slice(0, 20).map((s) => ({ ...s, content: s.content.slice(0, 900) }));
+  // Auction pages get their own places so the other searches cannot crowd them out.
+  const usable = results.filter((r) => !isNonProperty(r.url));
+  const auctions = usable.filter((r) => auctionPlatform(r.url)).slice(0, MAX_AUCTION_SOURCES);
+  const sources = [...usable.filter((r) => !auctionPlatform(r.url)).slice(0, MAX_SOURCES), ...auctions].map((s) => ({ ...s, content: s.content.slice(0, SOURCE_CHARS) }));
 
   let points: MarketPoint[] = [];
   let model = 'Tavily search + deterministic rate parser';

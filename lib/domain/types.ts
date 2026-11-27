@@ -146,6 +146,32 @@ export interface MarketPoint {
   lng?: number;
   origin: 'LIVE_SEARCH' | 'MANUAL';
   included: boolean;
+  /** Registered sale summary (Maharashtra Index II / sub-registrar record) the point was taken from. */
+  registration?: RegistrationRef;
+  /** Bank e-auction listing the point was taken from. */
+  auction?: AuctionRef;
+}
+
+export interface RegistrationRef {
+  docNo?: string;
+  /** Sub-registrar office (SRO). */
+  office?: string;
+  /** Registration date, YYYY-MM-DD. */
+  regDate?: string;
+  /** Consideration (price paid) as registered, Rs. */
+  considerationInr?: number;
+  /** Government market value (ready-reckoner based) on the same deed, Rs. */
+  govtValueInr?: number;
+  /** The Index II printout / PDF stored with the case. */
+  fileId?: string;
+}
+
+export type AuctionPlatform = 'BAANKNET' | 'IBAPI' | 'OTHER';
+
+export interface AuctionRef {
+  platform: AuctionPlatform;
+  /** Auction date, YYYY-MM-DD, if printed. */
+  auctionDate?: string;
 }
 
 export interface RejectedPoint {

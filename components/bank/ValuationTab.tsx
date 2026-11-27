@@ -1,20 +1,33 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { ExternalLink, Globe2, Loader2, Plus, Sigma, Trash2 } from 'lucide-react';
-import type { Application, EvidenceCategory, EvidenceKind, MarketPoint } from '@/lib/domain/types';
+import { ExternalLink, Gavel, Globe2, Loader2, Plus, Sigma, Trash2 } from 'lucide-react';
+import type { Application, AuctionPlatform, EvidenceCategory, EvidenceKind, MarketPoint } from '@/lib/domain/types';
 import { hasLand, isUnit } from '@/lib/domain/catalog';
 import type { Evaluation } from '@/lib/engines/evaluate';
-import { CATEGORY_LABEL, correctionText, EVIDENCE_DEFAULTS, KIND_LABEL, MAX_COMPARABLE_KM, SPATIAL_LABEL, type Consensus } from '@/lib/engines/evidence';
+import { auctionBenchmark, CATEGORY_LABEL, correctionText, EVIDENCE_DEFAULTS, KIND_LABEL, MAX_COMPARABLE_KM, SPATIAL_LABEL, type Consensus } from '@/lib/engines/evidence';
 import { inr, inrShort, rate } from '@/lib/engines/format';
 import { FSV_RATIO, LTV_CAP, METHOD_LABEL } from '@/lib/engines/valuation';
 import { emptySpec } from '@/lib/mapGeometry';
 import { api } from '@/lib/client/api';
+import { fileUrl } from '@/lib/client/files';
 import type { AppCtl } from '@/lib/client/useApplication';
 import { SpecMap } from '@/components/workbench/maps';
 import { Badge, Card, Field, Notice, Stat } from '@/components/ui';
+import RegisteredSale from './RegisteredSale';
 
 const CAT_COLOR: Record<EvidenceCategory, string> = { LAND: '#16a34a', BUILT: '#2563eb', GUIDELINE: '#a855f7' };
+const BAANKNET_URL = 'https://baanknet.com/property-listing';
+
+/** Auction platform from a listing URL (manual entries). */
+function platformOf(url: string): AuctionPlatform {
+  try {
+    const h = new URL(url).hostname.replace(/^www\./, '');
+    return h === 'baanknet.com' || h.endsWith('.baanknet.com') ? 'BAANKNET' : h === 'ibapi.in' || h.endsWith('.ibapi.in') ? 'IBAPI' : 'OTHER';
+  } catch {
+    return 'OTHER';
+  }
+}
 
 function ConsensusCard({ c, title }: { c: Consensus | null; title: string }) {
   if (!c) return <Card title={title}><p className="text-sm text-slate-500">No usable data points in this category yet.</p></Card>;
@@ -94,6 +107,7 @@ function ManualPoint({ ctl }: { ctl: AppCtl }) {
       lng: p.lng ? Number(p.lng) : undefined,
       origin: 'MANUAL' as const,
       included: true,
+      auction: p.category !== 'GUIDELINE' && p.kind === 'AUCTION' ? { platform: platformOf(p.url) } : undefined,
     } satisfies MarketPoint;
     if (await ctl.run({ op: 'addPoint', point })) setOpen(false);
   };
@@ -106,7 +120,16 @@ function ManualPoint({ ctl }: { ctl: AppCtl }) {
   const set = (k: keyof typeof p) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setP({ ...p, [k]: e.target.value });
   return (
     <div className="w-full rounded-xl border border-slate-200 bg-slate-50 p-4">
-      <div className="mb-3 text-sm font-semibold">Manual comparable (e.g. a registered sale from IGR, an auction notice, a past bank valuation)</div>
+      <div className="mb-3 text-sm font-semibold">Manual comparable (e.g. an auction notice, a past bank valuation, a guideline rate)</div>
+      {p.category !== 'GUIDELINE' && p.kind === 'AUCTION' && (
+        <p className="mb-3 text-xs text-slate-600">
+          Bank auction: open{' '}
+          <a href={BAANKNET_URL} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 font-semibold text-sky-700 hover:underline">
+            BAANKNET <ExternalLink className="h-3 w-3" />
+          </a>
+          , filter by {a.property.city || 'the city'}, open a property with a declared reserve price (not “indicative”), and copy the reserve price, area and page link here.
+        </p>
+      )}
       <div className="grid gap-3 sm:grid-cols-4">
         <Field label="Category">
           <select className="input" value={p.category} onChange={set('category')}>
@@ -224,11 +247,32 @@ function EvidenceTable({ ctl, ev }: { ctl: AppCtl; ev: Evaluation }) {
                           <ExternalLink className="h-3 w-3" />
                         </a>
                       )}
+                      {p.registration && (
+                        <div className="mt-0.5 text-[11px] text-slate-600">
+                          Registered{p.registration.regDate ? ` ${p.registration.regDate}` : ''}
+                          {p.registration.considerationInr ? ` · price ${inr(p.registration.considerationInr)}` : ''}
+                          {p.registration.govtValueInr ? ` · govt value ${inr(p.registration.govtValueInr)}` : ''}
+                          {p.registration.considerationInr && p.registration.govtValueInr && p.registration.considerationInr < p.registration.govtValueInr && <span className="font-semibold text-amber-700"> · below govt value</span>}
+                          {p.registration.fileId && (
+                            <>
+                              {' · '}
+                              <a href={fileUrl(p.registration.fileId)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-sky-700 hover:underline">
+                                Index II <ExternalLink className="h-3 w-3" />
+                              </a>
+                            </>
+                          )}
+                        </div>
+                      )}
+                      {p.auction?.auctionDate && <div className="mt-0.5 text-[11px] text-slate-600">Auction date {p.auction.auctionDate}</div>}
                       {excludedReason && <div className="text-[11px] font-medium text-amber-700">Not used: {excludedReason}</div>}
                     </td>
                     <td className="td text-xs">
                       {KIND_LABEL[p.kind]}
-                      {p.origin === 'MANUAL' && <div><Badge>manual</Badge></div>}
+                      <div className="flex flex-wrap gap-1">
+                        {p.registration && <Badge tone="green">Index II</Badge>}
+                        {p.auction && p.auction.platform !== 'OTHER' && <Badge tone="amber">{p.auction.platform}</Badge>}
+                        {p.origin === 'MANUAL' && <Badge>manual</Badge>}
+                      </div>
                     </td>
                     <td className="td text-right tabular-nums">{r ? rate(r) : '—'}</td>
                     <td className="td text-right tabular-nums">{corrected && cat !== 'GUIDELINE' ? rate(corrected) : '—'}</td>
@@ -247,6 +291,23 @@ function EvidenceTable({ ctl, ev }: { ctl: AppCtl; ev: Evaluation }) {
         );
       })}
     </div>
+  );
+}
+
+/** Bank e-auction reserves near the property vs the forced-sale rate PRAMAAN implies — a downside reference. */
+function AuctionCard({ ev, unit }: { ev: Evaluation; unit: boolean }) {
+  const cat = unit ? 'BUILT' : 'LAND';
+  const consensus = unit ? ev.evidence.built : ev.evidence.land;
+  const b = auctionBenchmark(ev.evidence.assessed, cat, consensus?.rate ?? null, FSV_RATIO);
+  if (!b) return null;
+  return (
+    <Card title={<span className="flex items-center gap-2"><Gavel className="h-4 w-4 text-maroon" /> Bank-auction benchmark ({CATEGORY_LABEL[cat].toLowerCase()})</span>} subtitle="Reserve prices of bank e-auctions near the property (BAANKNET / IBAPI), compared with the forced-sale rate this valuation implies. A downside reference — not part of the market rate.">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Stat label={`Median auction reserve (n = ${b.n})`} value={rate(b.medianReserve)} sub="as listed, no correction" />
+        <Stat label={`PRAMAAN forced-sale rate (${Math.round(FSV_RATIO * 100)}% × consensus)`} value={b.fsvRate ? rate(b.fsvRate) : '—'} sub={consensus ? `consensus ${rate(consensus.rate)}` : 'no consensus rate yet'} />
+        <Stat label="Auction reserve ÷ PRAMAAN FSV rate" value={b.ratio !== null ? `${Math.round(b.ratio * 100)}%` : '—'} sub={b.ratio === null ? '' : b.ratio < 0.7 ? 'auctions clear well below our FSV — review the FSV' : b.ratio > 1.3 ? 'auctions above our FSV — FSV looks conservative' : 'in line with our FSV'} tone={b.ratio !== null && b.ratio < 0.7 ? 'amber' : undefined} />
+      </div>
+    </Card>
   );
 }
 
@@ -298,7 +359,7 @@ export default function ValuationTab({ ctl, ev }: { ctl: AppCtl; ev: Evaluation 
         }
         actions={
           <button className="btn-primary" onClick={fetchLive} disabled={fetching || !ev.pin}>
-            {fetching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Globe2 className="h-4 w-4" />} {fetching ? 'Searching (can take a few minutes)…' : m.fetchedAt ? 'Fetch again' : 'Fetch market evidence'}
+            {fetching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Globe2 className="h-4 w-4" />} {fetching ? 'Searching (about a minute)…' : m.fetchedAt ? 'Fetch again' : 'Fetch market evidence'}
           </button>
         }
       >
@@ -316,9 +377,12 @@ export default function ValuationTab({ ctl, ev }: { ctl: AppCtl; ev: Evaluation 
               <span>Grey = not used. Pins sit at the locality centre printed in the source.</span>
             </div>
             <Notice>
-              Defaults (uncalibrated, shown so they can be challenged): listings × (1 − {EVIDENCE_DEFAULTS.listingDiscount}) asking→closing; auctions ÷ {EVIDENCE_DEFAULTS.auctionForcedSaleRatio}; reported sales × {EVIDENCE_DEFAULTS.kReg.toFixed(2)}; guideline rate = floor check only; points beyond {MAX_COMPARABLE_KM} km, duplicates and statistical outliers are not used.
+              Defaults (uncalibrated, shown so they can be challenged): listings × (1 − {EVIDENCE_DEFAULTS.listingDiscount}) asking→closing; bank auctions (BAANKNET / IBAPI reserve prices) ÷ {EVIDENCE_DEFAULTS.auctionForcedSaleRatio}; reported sales × {EVIDENCE_DEFAULTS.kReg.toFixed(2)}; guideline rate = floor check only; points beyond {MAX_COMPARABLE_KM} km, duplicates and statistical outliers are not used.
             </Notice>
-            <ManualPoint ctl={ctl} />
+            <div className="flex flex-wrap gap-2">
+              <RegisteredSale ctl={ctl} />
+              <ManualPoint ctl={ctl} />
+            </div>
             {m.rejected.length > 0 && (
               <details className="rounded-lg border border-slate-200 p-3 text-xs">
                 <summary className="cursor-pointer font-semibold text-slate-600">{m.rejected.length} search result(s) rejected — why</summary>
@@ -349,6 +413,8 @@ export default function ValuationTab({ ctl, ev }: { ctl: AppCtl; ev: Evaluation 
         {hasLand(a.property.type) && <ConsensusCard c={ev.evidence.land} title="Consensus land rate" />}
         {a.property.type !== 'PLOT' && <ConsensusCard c={ev.evidence.built} title={isUnit(a.property.type) ? 'Consensus built-property rate' : 'Built-property rate (cross-check)'} />}
       </div>
+
+      <AuctionCard ev={ev} unit={isUnit(a.property.type)} />
 
       <Card title={<span className="flex items-center gap-2"><Sigma className="h-4 w-4 text-maroon" /> Valuation — {METHOD_LABEL[v.method]}</span>} subtitle="Every figure below is computed by deterministic code from the inputs shown. Nothing is estimated by AI.">
         {v.missing.length > 0 && (

@@ -2,11 +2,11 @@
 import type { Application, MarketPoint, Snapshot } from '../lib/domain/types';
 import { checklistFor } from '../lib/domain/catalog';
 import { evaluate, toCustomerView, toSummary } from '../lib/engines/evaluate';
-import { consensusFor, assessPoints } from '../lib/engines/evidence';
+import { auctionBenchmark, consensusFor, assessPoints, registrationCheck } from '../lib/engines/evidence';
 import { toIndianRupeeWords } from '../lib/engines/format';
 import { fencePoint } from '../lib/engines/geofence';
 import { knownObjectLengthFt } from '../lib/engines/measure';
-import { parseAreaSqft, parseInrAmount, parseRatePerSqft, quoteInSource } from '../lib/engines/parse';
+import { areaToSqft, parseAreaSqft, parseIndianDate, parseInrAmount, parseRatePerSqft, quoteInSource } from '../lib/engines/parse';
 import { polygonAreaSqm, SQFT_PER_SQM } from '../lib/engines/stats';
 import { depreciation, residualLife } from '../lib/engines/valuation';
 
@@ -31,6 +31,18 @@ ok('parse ₹4,500/sqft', parseRatePerSqft('₹4,500/sqft') === 4500);
 ok('parse ₹45,000 per sq yd', parseRatePerSqft('₹45,000 per sq yd') === 5000);
 ok('quote found despite ₹ / comma / spacing', quoteInSource('₹4,500/sqft', 'Plots at Rs 4500 /sqft in Dharampeth'));
 ok('invented number rejected', !quoteInSource('₹5,500/sqft', 'Plots at Rs 4500 /sqft in Dharampeth'));
+
+/* ---------- Index II / auction helpers ---------- */
+ok('area 139.35 sq m → 1,499.95 sqft', areaToSqft(139.35, 'SQM') === 1499.95, String(areaToSqft(139.35, 'SQM')));
+ok('area 2 guntha → 2,178 sqft', areaToSqft(2, 'GUNTHA') === 2178);
+ok('area 0 rejected', areaToSqft(0, 'SQFT') === null);
+ok('Index II area "१३९.३५ चौ.मी." parsed', near(parseAreaSqft('१३९.३५ चौ.मी.'), 1499.95, 0.01), String(parseAreaSqft('१३९.३५ चौ.मी.')));
+ok('Index II amount "२५,००,०००" parsed', parseInrAmount('२५,००,०००') === 2500000);
+ok('date 12/03/2025 → 2025-03-12', parseIndianDate('12/03/2025') === '2025-03-12');
+ok('date Devanagari १२-०३-२०२५', parseIndianDate('१२-०३-२०२५') === '2025-03-12');
+ok('date ISO kept', parseIndianDate('2026-11-05') === '2026-11-05');
+ok('date 31/02/2025 rejected', parseIndianDate('31/02/2025') === null);
+ok('date garbage rejected', parseIndianDate('N/A') === null);
 
 /* ---------- geometry & measurement ---------- */
 const M = 111320;
@@ -217,6 +229,20 @@ const fullSnaps = [snap('a', 'Front', 'EXTERIOR', 5), snap('b', 'Road', 'EXTERIO
   a.market.points = [pt('b1', 'BUILT', 'LISTING', 8000), pt('b2', 'BUILT', 'LISTING', 8000), pt('b3', 'BUILT', 'LISTING', 8000)];
   const e2 = evaluate(a, now);
   ok('flat: MV = 1,920 × 6,880 = 1,32,09,600', e2.valuation.method === 'SALES_COMPARISON' && near(e2.valuation.mv, 1920 * 6880, 1e-6), String(e2.valuation.mv));
+}
+
+/* ---------- registered sales & auction benchmark ---------- */
+{
+  const pin = { lat: 21.1408, lng: 79.0604 };
+  const reg = (id: string, price: number, govt: number): MarketPoint => ({ id, category: 'LAND', kind: 'SALE', priceInr: price, areaSqft: 1000, date: '2026-09-01', origin: 'MANUAL', included: true, lat: pin.lat, lng: pin.lng, registration: { considerationInr: price, govtValueInr: govt } });
+  const as = assessPoints([reg('r1', 3000000, 2800000), reg('r2', 2900000, 3100000), reg('r3', 3100000, 3000000)], pin, now);
+  const rc = registrationCheck(as);
+  ok('registration: 3 compared, 1 below govt value', rc.compared === 3 && rc.below.length === 1 && rc.below[0].id === 'r2', JSON.stringify(rc));
+  ok('registration: ratio 29/31', near(rc.below[0]?.ratio, 2900000 / 3100000, 1e-9));
+  const auc = (id: string, r: number): MarketPoint => ({ id, category: 'LAND', kind: 'AUCTION', ratePerSqft: r, origin: 'LIVE_SEARCH', included: true, auction: { platform: 'BAANKNET' } });
+  const ab = auctionBenchmark(assessPoints([auc('a1', 1800), auc('a2', 2000), auc('a3', 2600), pt('l1', 'LAND', 'LISTING', 3000)], pin, now), 'LAND', 3000, 0.8);
+  ok('auction benchmark: median 2,000, FSV rate 2,400, ratio 0.833', ab !== null && ab.n === 3 && ab.medianReserve === 2000 && ab.fsvRate === 2400 && near(ab.ratio, 2000 / 2400, 1e-9), JSON.stringify(ab));
+  ok('auction benchmark: none without auctions', auctionBenchmark(assessPoints([pt('l2', 'LAND', 'LISTING', 3000)], pin, now), 'LAND', 3000, 0.8) === null);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

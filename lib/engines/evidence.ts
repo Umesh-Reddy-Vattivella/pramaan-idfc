@@ -211,6 +211,55 @@ export function guidelineRate(assessed: PointAssessment[]): number | null {
   return g.length ? Math.round(median(g)) : null;
 }
 
+/* ---------------- registered sales (Index II) ---------------- */
+
+export interface RegistrationCheck {
+  /** Registered sales that carry both the consideration and the government value. */
+  compared: number;
+  /** Of those, how many declare a consideration below the government value (possible under-declaration). */
+  below: { id: string; title: string; considerationInr: number; govtValueInr: number; ratio: number }[];
+}
+
+/** Registered sales in use vs the government value printed on the same deed. */
+export function registrationCheck(assessed: PointAssessment[]): RegistrationCheck {
+  const regs = assessed.filter((a) => a.used && a.point.kind === 'SALE' && a.point.registration?.considerationInr && a.point.registration?.govtValueInr);
+  const below = regs
+    .filter((a) => a.point.registration!.considerationInr! < a.point.registration!.govtValueInr!)
+    .map((a) => {
+      const r = a.point.registration!;
+      return { id: a.point.id, title: a.point.title ?? 'Registered sale', considerationInr: r.considerationInr!, govtValueInr: r.govtValueInr!, ratio: r.considerationInr! / r.govtValueInr! };
+    });
+  return { compared: regs.length, below };
+}
+
+/* ---------------- bank auctions as a forced-sale benchmark ---------------- */
+
+export interface AuctionBenchmark {
+  category: Exclude<EvidenceCategory, 'GUIDELINE'>;
+  n: number;
+  /** Median reserve price, Rs./sqft, as listed (no correction). */
+  medianReserve: number;
+  /** consensus rate × FSV ratio: what PRAMAAN's forced-sale value implies per sqft. */
+  fsvRate: number | null;
+  /** medianReserve ÷ fsvRate. */
+  ratio: number | null;
+}
+
+/**
+ * Bank e-auction reserves near the property (included, ≤ MAX_COMPARABLE_KM or distance unknown) compared with the
+ * forced-sale rate implied by the consensus. Auction points dropped as outliers still count here: this is a
+ * downside reference, not part of the market rate.
+ */
+export function auctionBenchmark(assessed: PointAssessment[], category: Exclude<EvidenceCategory, 'GUIDELINE'>, consensusRate: number | null, fsvRatio: number): AuctionBenchmark | null {
+  const rates = assessed
+    .filter((a) => a.point.kind === 'AUCTION' && a.point.category === category && a.point.included && a.rate !== null && (a.distanceKm === null || a.distanceKm <= MAX_COMPARABLE_KM))
+    .map((a) => a.rate!);
+  if (!rates.length) return null;
+  const medianReserve = Math.round(median(rates));
+  const fsvRate = consensusRate ? Math.round(consensusRate * fsvRatio) : null;
+  return { category, n: rates.length, medianReserve, fsvRate, ratio: fsvRate ? medianReserve / fsvRate : null };
+}
+
 export interface EvidenceResult {
   assessed: PointAssessment[];
   land: Consensus | null;
