@@ -13,7 +13,7 @@ There is no repeat KYC: identity was verified at loan onboarding. Geo-tagging pr
 
 ```bash
 npm install
-cp .env.example .env.local   # optional keys: Supabase, Tavily/OpenRouter, Google Maps, TURN
+cp .env.example .env.local   # optional keys: Supabase, Tavily/Gemini, Google Maps, TURN
 npm run dev                  # http://localhost:3000
 npm run verify               # deterministic engine checks
 npm run build

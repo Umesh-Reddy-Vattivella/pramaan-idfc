@@ -1,6 +1,6 @@
 /* ------------------------------------------------------------------
    Live market evidence around the property's geolocation (PRD_V3 §6.1).
-   Tavily real-time search → a free OpenRouter model COPIES printed price /
+   Tavily real-time search → Google Gemini COPIES printed price /
    area / rate text from numbered results → every copied number must exist
    verbatim in its source → units parsed deterministically → each locality
    geocoded so the engine can measure distance from the pin.
@@ -10,7 +10,7 @@
 import type { EvidenceCategory, EvidenceKind, MarketEvidence, MarketPoint, PropertyType, RejectedPoint } from '@/lib/domain/types';
 import { extractRatesFromText, parseAreaSqft, parseInrAmount, parseRatePerSqft, quoteInSource } from '@/lib/engines/parse';
 import { geocodeReverse, geocodeSearch } from '@/lib/live/geocode';
-import { openRouterChat } from '@/lib/live/openrouter';
+import { geminiChat } from '@/lib/live/gemini';
 import { tavilyMulti, type SearchResult } from '@/lib/live/tavily';
 
 const BUILT_ASSET: Record<PropertyType, string> = {
@@ -222,10 +222,10 @@ export async function fetchMarketEvidence(q: MarketQuery): Promise<MarketEvidenc
   let points: MarketPoint[] = [];
   let model = 'Tavily search + deterministic rate parser';
   let warning: string | undefined;
-  const orKey = process.env.OPENROUTER_API_KEY;
-  if (orKey) {
+  const geminiKey = process.env.GEMINI_API_KEY;
+  if (geminiKey) {
     try {
-      const r = await openRouterChat(orKey, SYSTEM, prompt(where, query, sources), started + 40000);
+      const r = await geminiChat(geminiKey, SYSTEM, prompt(where, query, sources), { json: true, deadline: started + 40000 });
       const parsed = extractJson(r.text);
       points = validate(Array.isArray(parsed) ? parsed : [], sources, query, rejected);
       model = `Tavily search + ${r.model} (copy-only extraction)`;

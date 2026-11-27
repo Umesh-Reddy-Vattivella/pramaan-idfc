@@ -28,7 +28,7 @@ Every number in a customer case comes from what the bank or customer entered, up
 1. Supabase (free): create project → SQL editor → run `supabase/schema.sql` → set `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` on Vercel.
 2. `PORTAL_SESSION_SECRET` = long random string.
 3. TURN (free tier, e.g. metered.ca Open Relay) → `TURN_URLS`, `TURN_USERNAME`, `TURN_CREDENTIAL` — without it calls can fail between a mobile network and an office network.
-4. `TAVILY_API_KEY` + `OPENROUTER_API_KEY` for live market evidence.
+4. `TAVILY_API_KEY` + `GEMINI_API_KEY` for live market evidence.
 5. Rehearse: bank laptop opens case → customer phone signs in → allow location → bank "Call customer" → customer answers → capture 4 exterior + 1 interior per floor → fetch market evidence → Sanity → report.
 
 ---

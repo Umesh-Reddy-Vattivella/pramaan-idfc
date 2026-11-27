@@ -152,7 +152,7 @@ The bank also records floors seen on the call, usage seen (residential, commerci
 
 1. The engine starts from the pin's locality, city and state (reverse-geocoded if missing).
 2. Live search (Tavily) runs for **land rates** (plots near the locality), **built-property rates** (houses, flats, shops or sheds, depending on property type) and the **guideline / circle rate**.
-3. A free LLM (OpenRouter) **only copies printed text** (price, area, rate, locality, date) from numbered search results. Every copied number must appear verbatim in its source, or the point is rejected with a reason. Social and product-catalogue sites are rejected outright. If the LLM is unavailable, a deterministic regex parser takes over.
+3. An LLM (Google Gemini) **only copies printed text** (price, area, rate, locality, date) from numbered search results. Every copied number must appear verbatim in its source, or the point is rejected with a reason. Social and product-catalogue sites are rejected outright. If the LLM is unavailable, a deterministic regex parser takes over.
 4. Units are parsed deterministically (₹ lakh/crore, sqft/sq yd/sq m/acre/gunta).
 5. Each comparable's locality is geocoded (OpenStreetMap Nominatim), and its distance from the pin is computed. Points more than 10 km away are kept in the list but excluded from the consensus.
 6. The bank can untick any point or add a manual comparable (rate, area, source URL, location).
