@@ -5,8 +5,8 @@
    the lock is taken, because the mutator may run more than once.
    ------------------------------------------------------------------ */
 import { randomInt, randomUUID } from 'node:crypto';
-import type { Application, ApplicationSummary, AttestKey, Borrower, DocFile, LocationFix, MarketEvidence, MarketPoint, Occupancy, Party, PlanFacts, PropertyFacts, Room, Snapshot, TitleFacts, Usage } from '@/lib/domain/types';
-import { checklistFor } from '@/lib/domain/catalog';
+import type { Application, ApplicationSummary, AttestKey, Borrower, DocFile, FloorPlanFacts, LocationFix, MarketEvidence, MarketPoint, Occupancy, Ownership, Party, PlanFacts, PropertyFacts, Snapshot, TitleFacts, Usage } from '@/lib/domain/types';
+import { checklistFor, floorPlanSlot } from '@/lib/domain/catalog';
 import { toSummary } from '@/lib/engines/evaluate';
 import { getFile, kvGetJson, kvSetJson, putFile, type StoredFile } from './store';
 
@@ -94,6 +94,7 @@ const log = (a: Application, by: Party | 'SYSTEM', text: string) => {
 export interface CreateInput {
   borrower: Borrower;
   property: PropertyFacts;
+  ownership?: Ownership;
 }
 
 function newRef(): string {
@@ -116,10 +117,10 @@ export async function createApplication(input: CreateInput, user: string): Promi
     property: input.property,
     plan: { approvedBuaSqft: null, approvedFloors: null, permissibleFsi: null },
     title: { chainFromYear: null },
+    ownership: input.ownership,
     documents: checklistFor(input.property.type),
     parcel: [],
     inspection: { snapshots: [], track: [], locationOn: false, observedFloors: null, observedUsage: null, occupancy: null, calls: [] },
-    rooms: [],
     market: { fetchedAt: null, queries: [], points: [], rejected: [] },
     attestations: {},
     review: { status: 'OPEN', remarks: '' },
@@ -215,6 +216,7 @@ export type BankOp =
   | { op: 'setProperty'; property: Partial<PropertyFacts> }
   | { op: 'setPlan'; plan: Partial<PlanFacts> }
   | { op: 'setTitle'; title: Partial<TitleFacts> }
+  | { op: 'setOwnership'; ownership: Partial<Ownership> }
   | { op: 'setParcel'; parcel: [number, number][] }
   | { op: 'reviewDoc'; key: string; status: 'VERIFIED' | 'REJECTED' | 'UPLOADED'; remark?: string }
   | { op: 'removeFile'; key: string; fileRowId: string }
@@ -223,8 +225,9 @@ export type BankOp =
   | { op: 'deleteSnapshot'; id: string }
   | { op: 'assignSnapshot'; id: string; label: string; area: 'EXTERIOR' | 'INTERIOR'; floor?: string }
   | { op: 'unassignSnapshot'; id: string }
-  | { op: 'upsertRoom'; room: Room }
-  | { op: 'deleteRoom'; id: string }
+  | { op: 'setFloorPlan'; floorPlan: FloorPlanFacts }
+  | { op: 'setFootprint'; footprint: [number, number][] }
+  | { op: 'requestFloorPlan' }
   | { op: 'togglePoint'; id: string; included: boolean }
   | { op: 'addPoint'; point: MarketPoint }
   | { op: 'deletePoint'; id: string }
@@ -257,6 +260,28 @@ export function sanitizeProperty(p: Partial<PropertyFacts>): Partial<PropertyFac
   return out;
 }
 
+const ACQ = ['PURCHASED', 'INHERITED', 'GIFTED', 'SELF_BUILT'] as const;
+const COVERED = ['PLOT', 'PLOT_BUILDING', 'UNIT'] as const;
+const AREA_UNIT = ['SQFT', 'SQYD', 'SQM'] as const;
+
+/** Purchase facts + claimed value (v2 §1A): only known values, within sane bounds. */
+export function sanitizeOwnership(o: Partial<Ownership>): Ownership {
+  const now = new Date();
+  const ym = typeof o.purchaseMonth === 'string' && /^\d{4}-\d{2}$/.test(o.purchaseMonth) && o.purchaseMonth >= '1950-01' && o.purchaseMonth <= `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}` ? o.purchaseMonth : undefined;
+  return {
+    acquiredBy: ACQ.includes(o.acquiredBy as 'PURCHASED') ? o.acquiredBy! : null,
+    purchaseMonth: ym,
+    priceInr: num(o.priceInr, 1000, 1e11),
+    covered: COVERED.includes(o.covered as 'PLOT') ? o.covered! : null,
+    areaBought: num(o.areaBought, 1, 1e8),
+    areaUnit: AREA_UNIT.includes(o.areaUnit as 'SQFT') ? o.areaUnit : 'SQFT',
+    constructedAfter: typeof o.constructedAfter === 'boolean' ? o.constructedAfter : null,
+    constructedYear: num(o.constructedYear, 1950, now.getFullYear()),
+    deedDocNo: txt(o.deedDocNo, 60) || undefined,
+    claimedValueInr: num(o.claimedValueInr, 1000, 1e11),
+  };
+}
+
 export function applyBankOp(a: Application, o: BankOp, user: string) {
   switch (o.op) {
     case 'setBorrower':
@@ -280,6 +305,10 @@ export function applyBankOp(a: Application, o: BankOp, user: string) {
     case 'setTitle':
       if ('chainFromYear' in o.title) a.title.chainFromYear = num(o.title.chainFromYear, 1900, new Date().getFullYear());
       log(a, 'BANK', 'Title-chain start year recorded');
+      return;
+    case 'setOwnership':
+      a.ownership = sanitizeOwnership({ ...(a.ownership ?? {}), ...o.ownership });
+      log(a, 'BANK', 'Purchase details / claimed value recorded');
       return;
     case 'setParcel':
       a.parcel = (Array.isArray(o.parcel) ? o.parcel : []).slice(0, 40).filter((p) => Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1])).map((p) => [p[0], p[1]] as [number, number]);
@@ -332,25 +361,32 @@ export function applyBankOp(a: Application, o: BankOp, user: string) {
       if (s) s.unassigned = true;
       return;
     }
-    case 'upsertRoom': {
-      const r = o.room;
-      const room: Room = {
-        id: txt(r.id, 60) || randomUUID(),
-        floor: txt(r.floor, 40) || 'Ground floor',
-        name: txt(r.name, 60) || 'Room',
-        lengthFt: num(r.lengthFt, 0.5, 500) ?? 0,
-        widthFt: num(r.widthFt, 0.5, 500) ?? 0,
-        method: r.method,
-        snapshotId: txt(r.snapshotId, 60),
+    case 'setFloorPlan': {
+      const f = o.floorPlan ?? ({} as FloorPlanFacts);
+      const seen = new Set<string>();
+      const floors = (Array.isArray(f.floors) ? f.floors : [])
+        .slice(0, 20)
+        .map((x) => ({ floor: txt(x?.floor, 40) || '', areaSqft: num(x?.areaSqft, 1, 1e7) ?? 0 }))
+        .filter((x) => x.floor && x.areaSqft > 0 && !seen.has(x.floor) && seen.add(x.floor));
+      a.floorPlan = {
+        source: f.source === 'GOVT_PORTAL' || f.source === 'CUSTOMER_UPLOAD' ? f.source : null,
+        reference: txt(f.reference, 300) || undefined,
+        basis: f.basis === 'CARPET' ? 'CARPET' : 'BUILT_UP',
+        floors,
       };
-      if (!room.lengthFt || !room.widthFt) throw new Error('Length and width must be between 0.5 and 500 ft');
-      const i = a.rooms.findIndex((x) => x.id === room.id);
-      if (i >= 0) a.rooms[i] = room;
-      else a.rooms.push(room);
+      if (a.floorPlan.source === 'CUSTOMER_UPLOAD' && !a.documents.some((d) => d.key === 'FLOOR_PLAN')) a.documents.push(floorPlanSlot());
+      log(a, 'BANK', `Floor-wise areas recorded from the floor plan (${floors.length} floor(s), ${Math.round(floors.reduce((s2, x) => s2 + x.areaSqft, 0))} sqft ${a.floorPlan.basis === 'CARPET' ? 'carpet' : 'built-up'})`);
       return;
     }
-    case 'deleteRoom':
-      a.rooms = a.rooms.filter((r) => r.id !== o.id);
+    case 'setFootprint':
+      a.footprint = (Array.isArray(o.footprint) ? o.footprint : []).slice(0, 40).filter((p) => Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1])).map((p) => [p[0], p[1]] as [number, number]);
+      log(a, 'BANK', a.footprint.length >= 3 ? `Roof outline drawn on the satellite top view (${a.footprint.length} corners)` : 'Roof outline cleared');
+      return;
+    case 'requestFloorPlan':
+      if (!a.documents.some((d) => d.key === 'FLOOR_PLAN')) {
+        a.documents.push(floorPlanSlot());
+        log(a, 'BANK', 'Requested the floor plan from the customer');
+      }
       return;
     case 'togglePoint': {
       const p = a.market.points.find((x) => x.id === o.id);
@@ -424,8 +460,8 @@ export function applyBankOp(a: Application, o: BankOp, user: string) {
 }
 
 export function setMarket(a: Application, m: MarketEvidence) {
-  // Keep manual comparables; replace live-search points.
-  const manual = a.market.points.filter((p) => p.origin === 'MANUAL');
+  // Keep manual comparables and official (government) values; replace live-search points.
+  const manual = a.market.points.filter((p) => p.origin !== 'LIVE_SEARCH');
   a.market = { ...m, points: [...m.points, ...manual] };
   log(a, 'BANK', `Market evidence fetched: ${m.points.length} data point(s), ${m.rejected.length} rejected`);
 }

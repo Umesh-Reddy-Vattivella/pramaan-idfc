@@ -1,9 +1,9 @@
 /* Bank: GET → { applications } (dashboard list) · POST { borrower, property } → { app } */
 import { NextResponse } from 'next/server';
-import type { Borrower, PropertyFacts } from '@/lib/domain/types';
+import type { Borrower, Ownership, PropertyFacts } from '@/lib/domain/types';
 import { DEFAULT_STRUCTURE, DEFAULT_USAGE, PROPERTY_TYPE_LABEL } from '@/lib/domain/catalog';
 import { bankSession } from '@/lib/server/auth';
-import { createApplication, listApplications, sanitizeProperty } from '@/lib/server/applications';
+import { createApplication, listApplications, sanitizeOwnership, sanitizeProperty } from '@/lib/server/applications';
 import { errorResponse, fail, readJson } from '@/lib/server/http';
 import { storeMode } from '@/lib/server/store';
 
@@ -23,7 +23,7 @@ export async function POST(req: Request) {
   const s = await bankSession();
   if (!s) return fail('Please sign in', 401);
   try {
-    const b = await readJson<{ borrower?: Partial<Borrower>; property?: Partial<PropertyFacts> }>(req);
+    const b = await readJson<{ borrower?: Partial<Borrower>; property?: Partial<PropertyFacts>; ownership?: Partial<Ownership> }>(req);
     const name = String(b.borrower?.name ?? '').trim().slice(0, 120);
     const mobile = String(b.borrower?.mobile ?? '').replace(/\D/g, '').slice(-10);
     if (name.length < 2) return fail('Enter the borrower’s name');
@@ -48,7 +48,8 @@ export async function POST(req: Request) {
       ageYears: p.ageYears ?? null,
       constructionRate: p.constructionRate ?? null,
     };
-    const app = await createApplication({ borrower: { name, mobile, losRef: String(b.borrower?.losRef ?? '').trim().slice(0, 60) || undefined }, property }, s.user);
+    const ownership = b.ownership ? sanitizeOwnership(b.ownership) : undefined;
+    const app = await createApplication({ borrower: { name, mobile, losRef: String(b.borrower?.losRef ?? '').trim().slice(0, 60) || undefined }, property, ownership: ownership?.acquiredBy || ownership?.claimedValueInr ? ownership : undefined }, s.user);
     return NextResponse.json({ app });
   } catch (err) {
     return errorResponse(err, 502);

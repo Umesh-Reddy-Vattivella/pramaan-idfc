@@ -1,11 +1,13 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { ExternalLink, Gavel, Globe2, Loader2, Plus, Sigma, Trash2 } from 'lucide-react';
+import { ExternalLink, Gavel, Globe2, Layers, Loader2, Plus, Sigma, Trash2 } from 'lucide-react';
 import type { Application, AuctionPlatform, EvidenceCategory, EvidenceKind, MarketPoint } from '@/lib/domain/types';
 import { hasLand, isUnit } from '@/lib/domain/catalog';
 import type { Evaluation } from '@/lib/engines/evaluate';
-import { auctionBenchmark, CATEGORY_LABEL, correctionText, EVIDENCE_DEFAULTS, KIND_LABEL, MAX_COMPARABLE_KM, SPATIAL_LABEL, type Consensus } from '@/lib/engines/evidence';
+import { auctionBenchmark, CATEGORY_LABEL, correctionText, DATE_SOURCE_LABEL, KIND_LABEL, MAX_COMPARABLE_KM, TIER_LABEL, type Consensus, type Estimate } from '@/lib/engines/evidence';
+import type { FinalRate } from '@/lib/engines/purchase';
+import { VALUATION as V } from '@/config/valuation';
 import { inr, inrShort, rate } from '@/lib/engines/format';
 import { FSV_RATIO, LTV_CAP, METHOD_LABEL } from '@/lib/engines/valuation';
 import { emptySpec } from '@/lib/mapGeometry';
@@ -15,6 +17,8 @@ import type { AppCtl } from '@/lib/client/useApplication';
 import { SpecMap } from '@/components/workbench/maps';
 import { Badge, Card, Field, Notice, Stat } from '@/components/ui';
 import RegisteredSale from './RegisteredSale';
+import GovValueCard from './GovValueCard';
+import { COVERED_LABEL } from './OwnershipFields';
 
 const CAT_COLOR: Record<EvidenceCategory, string> = { LAND: '#16a34a', BUILT: '#2563eb', GUIDELINE: '#a855f7' };
 const BAANKNET_URL = 'https://baanknet.com/property-listing';
@@ -29,56 +33,100 @@ function platformOf(url: string): AuctionPlatform {
   }
 }
 
+const pctTxt = (x: number, d = 1) => `${(x * 100).toFixed(d)}%`;
+const SPREAD_LABEL = { MAD: '1.4826 × weighted MAD', SAMPLE_SD: 'sample SD (n − 1) ÷ mean', SINGLE: 'single point: SE 15%' } as const;
+
+function EstimateLine({ label, e }: { label: string; e: Estimate | null }) {
+  if (!e) return null;
+  return (
+    <div>
+      {label}: <b className="text-ink">{rate(e.rate)}</b>, u {pctTxt(e.u)}, n_eff {e.nEff.toFixed(1)}
+      {e.rows.length > 1 ? ` · Q = ${e.q.toFixed(2)} vs K − 1 = ${e.rows.length - 1}${e.widened ? ` → u widened × √(Q ÷ (K − 1))` : ' (kinds agree)'}` : ''}
+    </div>
+  );
+}
+
 function ConsensusCard({ c, title }: { c: Consensus | null; title: string }) {
   if (!c) return <Card title={title}><p className="text-sm text-slate-500">No usable data points in this category yet.</p></Card>;
   return (
-    <Card title={title} subtitle={`${c.n} data point(s) · median distance ${c.medianDistanceKm !== null ? `${c.medianDistanceKm.toFixed(1)} km` : 'unknown'} · median age ${c.medianAgeMonths.toFixed(0)} months`}>
-      <table className="w-full text-sm">
-        <thead className="bg-slate-50">
-          <tr>
-            <th className="th">Source type</th>
-            <th className="th text-right">n</th>
-            <th className="th text-right">Median rate</th>
-            <th className="th">Correction</th>
-            <th className="th text-right">Corrected</th>
-            <th className="th text-right">Weight</th>
-          </tr>
-        </thead>
-        <tbody>
-          {c.rows.map((r) => (
-            <tr key={r.kind}>
-              <td className="td">{KIND_LABEL[r.kind]}</td>
-              <td className="td text-right tabular-nums">{r.n}</td>
-              <td className="td text-right tabular-nums">{rate(r.medianRate)}</td>
-              <td className="td text-xs text-slate-500">{correctionText(r.kind)}</td>
-              <td className="td text-right tabular-nums">{rate(r.correctedRate)}</td>
-              <td className="td text-right tabular-nums">{(r.weight * 100).toFixed(1)}%</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <div className="mt-3 rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
-        <div className="font-mono">
-          R = Σ wₖ × rₖ = {c.rows.map((r) => `${(r.weight * 100).toFixed(1)}% × ${Math.round(r.correctedRate).toLocaleString('en-IN')}`).join(' + ')} ≈ <b className="text-ink">{rate(c.rate)}</b> (rounded to ₹10)
+    <Card
+      title={title}
+      subtitle={`${c.n} point(s) · n_eff ${c.nEff.toFixed(1)} · weight in T1 ${pctTxt(c.tierShare.T1, 0)} / T2 ${pctTxt(c.tierShare.T2, 0)} / T3 ${pctTxt(c.tierShare.T3, 0)} · weighted median age ${c.medianAgeMonths.toFixed(0)} months`}
+    >
+      {c.thinMarket && (
+        <div className="mb-3">
+          <Notice tone="red">Thin market: n_eff of T1 + T2 is {c.nEffT1T2.toFixed(1)} (below {V.t13.blockNeffT1T2}). T13 refers the case for a physical check.</Notice>
         </div>
-        <div className="mt-1">Weights wₖ ∝ 1/σₖ² (σ = standard error of each source type; 15% prior when n = 1). Range {rate(c.low)} – {rate(c.high)} (± CV).</div>
+      )}
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[620px] text-sm">
+          <thead className="bg-slate-50">
+            <tr>
+              <th className="th">Source kind</th>
+              <th className="th text-right">n / n_eff</th>
+              <th className="th text-right">rₖ (w. median)</th>
+              <th className="th">Spread sₖ</th>
+              <th className="th text-right">SEₖ</th>
+              <th className="th text-right">τₖ</th>
+              <th className="th text-right">σₖ ÷ rₖ</th>
+              <th className="th text-right">Weight</th>
+            </tr>
+          </thead>
+          <tbody>
+            {c.rows.map((r) => (
+              <tr key={r.kind}>
+                <td className="td">
+                  {KIND_LABEL[r.kind]}
+                  <div className="text-[10px] text-slate-400">{correctionText(r.kind)}</div>
+                </td>
+                <td className="td text-right tabular-nums">
+                  {r.n} / {r.nEff.toFixed(1)}
+                </td>
+                <td className="td text-right tabular-nums">{rate(r.rate)}</td>
+                <td className="td text-xs">
+                  {r.spread !== null ? pctTxt(r.spread) : '—'}
+                  <div className="text-[10px] text-slate-400">{SPREAD_LABEL[r.spreadMethod]}</div>
+                </td>
+                <td className="td text-right tabular-nums">{pctTxt(r.se)}</td>
+                <td className="td text-right tabular-nums">{pctTxt(r.tau)}</td>
+                <td className="td text-right tabular-nums">{pctTxt(r.sigmaRel)}</td>
+                <td className="td text-right tabular-nums">{pctTxt(r.weight)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="mt-3 space-y-1 rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
+        <div className="font-mono">σₖ = rₖ √(SEₖ² + τₖ²), SEₖ = 1.25 × sₖ ÷ √n_eff · R = Σ(rₖ ÷ σₖ²) ÷ Σ(1 ÷ σₖ²) · u = 1 ÷ √Σ(1 ÷ σₖ²)</div>
+        <EstimateLine label="Same locality (T1)" e={c.local} />
+        <EstimateLine label="All tiers" e={c.all} />
+        {c.local ? (
+          <div className="font-mono">
+            Z = {c.nEffT1.toFixed(1)} ÷ ({c.nEffT1.toFixed(1)} + {V.localBlendK}) = {c.z.toFixed(2)} → R = {c.z.toFixed(2)} × {Math.round(c.local.rate).toLocaleString('en-IN')} + {(1 - c.z).toFixed(2)} × {Math.round(c.all.rate).toLocaleString('en-IN')} ≈ <b className="text-ink">{rate(c.rate)}</b>
+          </div>
+        ) : (
+          <div>No same-locality (T1) points: Z = 0, R = R_all ≈ <b className="text-ink">{rate(c.rate)}</b>.</div>
+        )}
+        <div>
+          u = {pctTxt(c.u)} of the rate · 80% range <b className="text-ink">{rate(c.low)} – {rate(c.high)}</b> (R ± {V.rangeZ} u)
+        </div>
       </div>
       <div className="mt-3 grid grid-cols-5 gap-2 text-center text-xs">
         {[
-          ['Agreement', c.score.agreement, 35, `CV ${(c.cv * 100).toFixed(1)}%`],
-          ['Depth', c.score.depth, 25, `n = ${c.n}`],
-          ['Recency', c.score.recency, 20, `${c.medianAgeMonths.toFixed(0)} mo`],
-          ['Spatial', c.score.spatial, 20, SPATIAL_LABEL[c.tier].split(' (')[0]],
+          ['Agreement', c.score.agreement, V.agreement.max, `u ${pctTxt(c.u)}`],
+          ['Depth', c.score.depth, V.depth.base + V.depth.bonus, `n_eff ${c.nEff.toFixed(1)}`],
+          ['Recency', c.score.recency, V.recency.max, `${c.medianAgeMonths.toFixed(0)} mo`],
+          ['Spatial', c.score.spatial, V.spatial.max, `T1 ${pctTxt(c.tierShare.T1, 0)}`],
         ].map(([l, v, max, sub]) => (
           <div key={l as string} className="rounded-lg border border-slate-200 p-2">
             <div className="text-[10px] font-semibold uppercase text-slate-500">{l}</div>
             <div className="font-bold tabular-nums">
-              {Math.round(v as number)}/{max}
+              {(v as number).toFixed(1).replace(/\.0$/, '')}/{max}
             </div>
             <div className="text-[10px] text-slate-400">{sub}</div>
           </div>
         ))}
-        <div className={`rounded-lg p-2 ${c.score.total >= 80 ? 'bg-emerald-50' : c.score.total >= 60 ? 'bg-amber-50' : 'bg-red-50'}`}>
+        <div className={`rounded-lg p-2 ${c.score.total >= V.routing.instant ? 'bg-emerald-50' : c.score.total >= V.routing.review ? 'bg-amber-50' : 'bg-red-50'}`}>
           <div className="text-[10px] font-semibold uppercase text-slate-500">Authenticity S</div>
           <div className="text-lg font-extrabold tabular-nums">{c.score.total}</div>
         </div>
@@ -86,6 +134,53 @@ function ConsensusCard({ c, title }: { c: Consensus | null; title: string }) {
     </Card>
   );
 }
+
+/** A + B + C → the rate the valuation uses (Valuation Logic v2 §1A). */
+function RateCard({ f, title }: { f: FinalRate | null; title: string }) {
+  if (!f) return null;
+  const g = f.guideline;
+  const c = f.purchase;
+  return (
+    <Card title={<span className="flex items-center gap-2"><Layers className="h-4 w-4 text-maroon" /> {title}</span>} subtitle="Market rate (B) and the customer’s own purchase price brought to today (C), weighted by precision; C never above 30%. The official government value (A) is a floor with weight 0.">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Stat label="A · Government value" value={g ? rate(g.rate) : '—'} sub={g ? (g.official ? `official (IGRS) · floor · market ÷ govt ${(f.blended / g.rate).toFixed(2)}` : 'web search · check only, not a floor') : 'not available'} />
+        <Stat label="B · Market rate" value={rate(f.market.rate)} sub={`u ${pctTxt(f.market.u)} · weight ${pctTxt(f.wMarket, 0)}`} />
+        <Stat label="C · Purchase price, indexed" value={c ? rate(c.rate) : '—'} sub={c ? `u ${pctTxt(c.u)} · ${c.years.toFixed(1)} yrs · weight ${pctTxt(f.wPurchase, 0)}${f.capped ? ' (capped)' : ''}` : 'not recorded / not applicable'} />
+      </div>
+      {c && (
+        <div className="mt-3 flex h-3 overflow-hidden rounded-full bg-slate-100 text-[0px]" title="Weights">
+          <div className="bg-sky-600" style={{ width: `${f.wMarket * 100}%` }} />
+          <div className="bg-amber-500" style={{ width: `${f.wPurchase * 100}%` }} />
+        </div>
+      )}
+      {c && (
+        <table className="mt-3 w-full text-xs">
+          <tbody>
+            {c.lines.map((l, i) => (
+              <tr key={i}>
+                <td className="td font-medium">{l.label}</td>
+                <td className="td font-mono text-slate-600">{l.formula}</td>
+                <td className="td font-mono text-slate-600">{l.working}</td>
+                <td className="td text-right font-semibold tabular-nums">{l.result}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <div className="mt-3 rounded-lg bg-rose-50/60 p-3 text-sm">
+        Rate used: <b className="tabular-nums">{rate(f.rate)}</b> · 80% range {rate(f.low)} – {rate(f.high)} (u {pctTxt(f.u)})
+        {f.floorApplied && <span className="font-semibold text-amber-700"> · held at the government value (floor)</span>}
+        {u_wide(f) && <span className="font-semibold text-amber-700"> · u above {V.wideRangeU * 100}%: loan sized on the lower edge</span>}
+      </div>
+      {f.divergence !== null && f.divergence > V.purchase.divergenceWarn && (
+        <div className="mt-2">
+          <Notice tone="amber">The indexed purchase price and the market rate are {pctTxt(f.divergence, 0)} apart (more than {V.purchase.divergenceWarn * 100}%): either the declared price is wrong or the listings missed something (T21).</Notice>
+        </div>
+      )}
+    </Card>
+  );
+}
+const u_wide = (f: FinalRate) => f.u > V.wideRangeU;
 
 function ManualPoint({ ctl }: { ctl: AppCtl }) {
   const a = ctl.app!;
@@ -218,12 +313,13 @@ function EvidenceTable({ ctl, ev }: { ctl: AppCtl; ev: Evaluation }) {
                   <th className="th text-right">Rate</th>
                   <th className="th text-right">Corrected</th>
                   <th className="th text-right">Distance</th>
+                  <th className="th">Tier · weight</th>
                   <th className="th">Date</th>
                   <th className="th" />
                 </tr>
               </thead>
               <tbody>
-                {list.map(({ point: p, rate: r, corrected, distanceKm, used, excludedReason }) => (
+                {list.map(({ point: p, rate: r, corrected, distanceKm, used, excludedReason, tier, weight, tau, tauNotes, notes, dateSource, localityAverage }) => (
                   <tr key={p.id} className={used ? '' : 'opacity-60'}>
                     <td className="td">
                       <input type="checkbox" checked={p.included} onChange={(e) => ctl.run({ op: 'togglePoint', id: p.id, included: e.target.checked })} />
@@ -264,6 +360,12 @@ function EvidenceTable({ ctl, ev }: { ctl: AppCtl; ev: Evaluation }) {
                         </div>
                       )}
                       {p.auction?.auctionDate && <div className="mt-0.5 text-[11px] text-slate-600">Auction date {p.auction.auctionDate}</div>}
+                      {cat !== 'GUIDELINE' && (notes.length > 0 || tauNotes.length > 0) && (
+                        <div className="mt-0.5 text-[10px] text-slate-500">
+                          {notes.join(' · ')}
+                          {tauNotes.length > 0 && `${notes.length ? ' · ' : ''}τ ${(tau * 100).toFixed(0)}% (+${tauNotes.join(', +')})`}
+                        </div>
+                      )}
                       {excludedReason && <div className="text-[11px] font-medium text-amber-700">Not used: {excludedReason}</div>}
                     </td>
                     <td className="td text-xs">
@@ -272,12 +374,19 @@ function EvidenceTable({ ctl, ev }: { ctl: AppCtl; ev: Evaluation }) {
                         {p.registration && <Badge tone="green">Index II</Badge>}
                         {p.auction && p.auction.platform !== 'OTHER' && <Badge tone="amber">{p.auction.platform}</Badge>}
                         {p.origin === 'MANUAL' && <Badge>manual</Badge>}
+                        {p.origin === 'OFFICIAL' && <Badge tone="green">IGRS official</Badge>}
+                        {localityAverage && <Badge tone="blue">locality avg ×3</Badge>}
+                        {p.approxLocation && <Badge>approx. location</Badge>}
                       </div>
                     </td>
                     <td className="td text-right tabular-nums">{r ? rate(r) : '—'}</td>
                     <td className="td text-right tabular-nums">{corrected && cat !== 'GUIDELINE' ? rate(corrected) : '—'}</td>
                     <td className="td text-right tabular-nums text-xs">{distanceKm !== null ? `${distanceKm.toFixed(1)} km` : 'unknown'}</td>
-                    <td className="td text-xs">{p.date ?? 'undated'}</td>
+                    <td className="td text-xs">{cat === 'GUIDELINE' ? '—' : `${tier} · ${weight.toFixed(2)}`}</td>
+                    <td className="td text-xs">
+                      {p.date ?? 'undated'}
+                      <div className="text-[10px] text-slate-400">{DATE_SOURCE_LABEL[dateSource]}</div>
+                    </td>
                     <td className="td text-right">
                       <button className="btn-ghost px-1.5 text-red-600" onClick={() => ctl.run({ op: 'deletePoint', id: p.id })} title="Delete">
                         <Trash2 className="h-3.5 w-3.5" />
@@ -336,7 +445,11 @@ export default function ValuationTab({ ctl, ev }: { ctl: AppCtl; ev: Evaluation 
     const sp = emptySpec(c, 13, 'street');
     if (ev.pin) {
       sp.markers.push({ id: 'pin', pos: c, color: '#9C1D26', size: 9, tooltip: 'Subject property', permanent: true });
-      sp.circles.push({ id: 'c1', center: c, radiusM: 1000, color: '#16a34a', tooltip: '1 km' }, { id: 'c3', center: c, radiusM: 3000, color: '#f59e0b', tooltip: '3 km' }, { id: 'c10', center: c, radiusM: MAX_COMPARABLE_KM * 1000, color: '#94a3b8', tooltip: `${MAX_COMPARABLE_KM} km — farther points not used` });
+      sp.circles.push(
+        { id: 'c1', center: c, radiusM: V.tierKm.T1 * 1000, color: '#16a34a', tooltip: TIER_LABEL.T1 },
+        { id: 'c3', center: c, radiusM: V.tierKm.T2 * 1000, color: '#f59e0b', tooltip: TIER_LABEL.T2 },
+        { id: 'c10', center: c, radiusM: MAX_COMPARABLE_KM * 1000, color: '#94a3b8', tooltip: `${MAX_COMPARABLE_KM} km — farther points not used` },
+      );
     }
     // Several points can share a locality centroid: jitter slightly so each is visible.
     ev.evidence.assessed.forEach((x, i) => {
@@ -377,7 +490,7 @@ export default function ValuationTab({ ctl, ev }: { ctl: AppCtl; ev: Evaluation 
               <span>Grey = not used. Pins sit at the locality centre printed in the source.</span>
             </div>
             <Notice>
-              Defaults (uncalibrated, shown so they can be challenged): listings × (1 − {EVIDENCE_DEFAULTS.listingDiscount}) asking→closing; bank auctions (BAANKNET / IBAPI reserve prices) ÷ {EVIDENCE_DEFAULTS.auctionForcedSaleRatio}; reported sales × {EVIDENCE_DEFAULTS.kReg.toFixed(2)}; guideline rate = floor check only; points beyond {MAX_COMPARABLE_KM} km, duplicates and statistical outliers are not used.
+              Valuation Logic v2 defaults (uncalibrated, shown so they can be challenged): listings × (1 − {V.listingDiscount}), τ {V.tau.LISTING}; sales × {V.kReg.toFixed(2)}, τ {V.tau.SALE}; auctions ÷ {V.auctionForcedSaleRatio}, τ {V.tau.AUCTION}, only in T1 / T2. Tiers T1 ≤ {V.tierKm.T1} km or same locality (weight 1), T2 ≤ {V.tierKm.T2} km (0.5), T3 ≤ {V.tierKm.T3} km or unknown (0.25); weight halves every {V.recencyHalfLifeMonths} months; undated = {V.undatedAgeMonths} months. Comparables must match the usage and type; outliers beyond {V.outlierRobustSd} robust SD of the log-rate are dropped.
             </Notice>
             <div className="flex flex-wrap gap-2">
               <RegisteredSale ctl={ctl} />
@@ -409,10 +522,17 @@ export default function ValuationTab({ ctl, ev }: { ctl: AppCtl; ev: Evaluation 
         </div>
       </Card>
 
-      <div className="grid gap-5 lg:grid-cols-2">
-        {hasLand(a.property.type) && <ConsensusCard c={ev.evidence.land} title="Consensus land rate" />}
-        {a.property.type !== 'PLOT' && <ConsensusCard c={ev.evidence.built} title={isUnit(a.property.type) ? 'Consensus built-property rate' : 'Built-property rate (cross-check)'} />}
+      <GovValueCard ctl={ctl} ev={ev} />
+
+      <div className="grid gap-5 xl:grid-cols-2">
+        {hasLand(a.property.type) && <ConsensusCard c={ev.evidence.land} title="Market land rate (B)" />}
+        {a.property.type !== 'PLOT' && <ConsensusCard c={ev.evidence.built} title={isUnit(a.property.type) ? 'Market built-property rate (B)' : 'Built-property rate (cross-check)'} />}
       </div>
+
+      <RateCard f={isUnit(a.property.type) ? ev.rates.BUILT : ev.rates.LAND} title={`Rate used for the valuation — ${isUnit(a.property.type) ? 'built-up' : 'land'}`} />
+      {ev.rates.purchase && !ev.rates.purchase.applicable && (
+        <Notice tone="amber">Purchase price not used: {ev.rates.purchase.reason}{a.ownership?.covered ? ` (covered: ${COVERED_LABEL[a.ownership.covered]})` : ''}.</Notice>
+      )}
 
       <AuctionCard ev={ev} unit={isUnit(a.property.type)} />
 
@@ -449,9 +569,9 @@ export default function ValuationTab({ ctl, ev }: { ctl: AppCtl; ev: Evaluation 
         {v.ready && (
           <>
             <div className="mt-4 grid gap-3 sm:grid-cols-4">
-              <Stat label="Market value" value={inrShort(v.mv!)} sub={inr(v.mv!)} tone="maroon" />
+              <Stat label="Market value" value={inrShort(v.mv!)} sub={v.mvLow !== null && v.mvHigh !== null ? `80% range ${inrShort(v.mvLow)} – ${inrShort(v.mvHigh)}` : inr(v.mv!)} tone="maroon" />
               <Stat label={`Forced-sale value (${Math.round(FSV_RATIO * 100)}%)`} value={inrShort(v.fsv!)} sub={inr(v.fsv!)} />
-              <Stat label={`Max loan (LTV ${Math.round(v.ltvCap * 100)}%)`} value={inrShort(v.maxLoan!)} sub={inr(v.maxLoan!)} tone="green" />
+              <Stat label={`Max loan (LTV ${Math.round(v.ltvCap * 100)}%)`} value={inrShort(v.maxLoan!)} sub={v.wideRange ? 'sized on the lower edge (wide range)' : inr(v.maxLoan!)} tone="green" />
               <Stat label="Residual life" value={v.residualLife !== null ? `${v.residualLife} yrs` : '—'} sub={v.totalLife ? `economic life ${v.totalLife} yrs` : 'open plot'} />
             </div>
             <p className="mt-3 text-sm text-slate-600">

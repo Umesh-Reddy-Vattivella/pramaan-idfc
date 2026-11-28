@@ -92,16 +92,23 @@ export interface LocationFix {
   at: string;
 }
 
-export type RoomMethod = 'SNAPSHOT_SCALE' | 'TAPE_ON_CALL' | 'PLAN';
+/** Where the floor plan came from: a copy from the authority's website, or the customer's upload. */
+export type FloorPlanSource = 'GOVT_PORTAL' | 'CUSTOMER_UPLOAD';
 
-export interface Room {
-  id: string;
+/** Area of one floor as printed on the floor plan. */
+export interface FloorArea {
   floor: string;
-  name: string;
-  lengthFt: number;
-  widthFt: number;
-  method: RoomMethod;
-  snapshotId?: string;
+  areaSqft: number;
+}
+
+/** Floor-wise areas taken from the building's floor plan (replaces room-wise measurement). */
+export interface FloorPlanFacts {
+  source: FloorPlanSource | null;
+  /** Permit / plan number, or the portal link the copy was taken from. */
+  reference?: string;
+  /** Basis printed on the plan: built-up (used as is) or carpet (× 1.2). */
+  basis: 'BUILT_UP' | 'CARPET';
+  floors: FloorArea[];
 }
 
 export type Occupancy = 'SELF' | 'RENTED' | 'VACANT';
@@ -126,6 +133,10 @@ export interface Inspection {
 }
 
 export type EvidenceCategory = 'LAND' | 'BUILT' | 'GUIDELINE';
+/** Where a point's date came from: printed in the source, the page's publish date, or assumed (no date). */
+export type DateSource = 'PRINTED' | 'PAGE' | 'ASSUMED';
+/** Area basis printed with a flat / unit price. PRAMAAN values on built-up (carpet × 1.2). */
+export type AreaBasis = 'CARPET' | 'BUILT_UP' | 'SUPER_BUILT_UP';
 export type EvidenceKind = 'LISTING' | 'SALE' | 'AUCTION' | 'GUIDELINE';
 
 export interface MarketPoint {
@@ -144,8 +155,19 @@ export interface MarketPoint {
   quote?: string;
   lat?: number;
   lng?: number;
-  origin: 'LIVE_SEARCH' | 'MANUAL';
+  /** LIVE_SEARCH = web search; MANUAL = typed by the valuer; OFFICIAL = government lookup (kept on re-fetch). */
+  origin: 'LIVE_SEARCH' | 'MANUAL' | 'OFFICIAL';
   included: boolean;
+  dateSource?: DateSource;
+  areaBasis?: AreaBasis;
+  /** Project / society name as printed (geocoded before the locality). */
+  project?: string;
+  /** Location is the centre of the printed locality, not the property itself. */
+  approxLocation?: boolean;
+  /** Government guideline rate (Rs./sqft) of the comparable's own locality, for the location adjustment. */
+  gCompPerSqft?: number;
+  /** Official government value the point was taken from (GUIDELINE points). */
+  guideline?: GuidelineRef;
   /** Registered sale summary (Maharashtra Index II / sub-registrar record) the point was taken from. */
   registration?: RegistrationRef;
   /** Bank e-auction listing the point was taken from. */
@@ -168,6 +190,27 @@ export interface RegistrationRef {
 
 export type AuctionPlatform = 'BAANKNET' | 'IBAPI' | 'OTHER';
 
+/** A row of the Telangana IGRS Market Value Search, as adopted by the valuer. */
+export interface GuidelineRef {
+  source: 'IGRS_TELANGANA';
+  /** LAND = land value (Rs. per sq yd); APARTMENT = apartment value (Rs. per sqft). */
+  basis: 'LAND' | 'APARTMENT';
+  district: string;
+  mandal?: string;
+  village?: string;
+  locality: string;
+  wardBlock?: string;
+  /** e.g. "01(Residential)", "02(Commercial)". */
+  classification?: string;
+  /** Effective date of the rate, YYYY-MM-DD. */
+  effectiveDate?: string;
+  /** Rate exactly as published, and its unit. */
+  printedRate: number;
+  printedUnit: 'SQYD' | 'SQFT';
+  fetchedAt: string;
+  url: string;
+}
+
 export interface AuctionRef {
   platform: AuctionPlatform;
   /** Auction date, YYYY-MM-DD, if printed. */
@@ -188,6 +231,31 @@ export interface MarketEvidence {
   rejected: RejectedPoint[];
   warning?: string;
   searchedFor?: string;
+}
+
+export type Acquisition = 'PURCHASED' | 'INHERITED' | 'GIFTED' | 'SELF_BUILT';
+/** What the purchase price covered: decides which rate it is compared with. */
+export type PurchaseCovered = 'PLOT' | 'PLOT_BUILDING' | 'UNIT';
+export type PurchaseAreaUnit = 'SQFT' | 'SQYD' | 'SQM';
+
+/** How the customer got the property, and what they say it is worth (v2 §1A, component C). */
+export interface Ownership {
+  acquiredBy: Acquisition | null;
+  /** Month of purchase, YYYY-MM. */
+  purchaseMonth?: string;
+  /** Consideration on the sale deed, Rs. */
+  priceInr?: number | null;
+  covered?: PurchaseCovered | null;
+  /** Area bought, if different from today's area. */
+  areaBought?: number | null;
+  areaUnit?: PurchaseAreaUnit;
+  /** Built after a plot-only purchase. */
+  constructedAfter?: boolean | null;
+  constructedYear?: number | null;
+  /** Sale deed document number (for later verification through the EC). */
+  deedDocNo?: string;
+  /** Customer's claimed value of the property, Rs. Cross-check only — never used in the value. */
+  claimedValueInr?: number | null;
 }
 
 export type AttestKey = 'DEMOLITION_LIST' | 'ROAD_WIDENING';
@@ -229,11 +297,16 @@ export interface Application {
   property: PropertyFacts;
   plan: PlanFacts;
   title: TitleFacts;
+  /** Purchase price and the customer's claimed value (optional; older cases have none). */
+  ownership?: Ownership;
   documents: DocSlot[];
   /** Plot boundary drawn on the satellite map: [lat, lng][] */
   parcel: [number, number][];
   inspection: Inspection;
-  rooms: Room[];
+  /** Floor-wise areas from the floor plan (optional; older cases have none). */
+  floorPlan?: FloorPlanFacts;
+  /** Building roof outline drawn on the satellite top view: [lat, lng][] */
+  footprint?: [number, number][];
   market: MarketEvidence;
   attestations: Partial<Record<AttestKey, Attestation>>;
   review: Review;

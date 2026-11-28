@@ -43,6 +43,8 @@ const AUCTION_TITLE: Record<PropertyType, string> = {
 };
 /** Bank e-auction portals searched for reserve prices. */
 export const AUCTION_DOMAINS = ['baanknet.com', 'ibapi.in'];
+/** Listings come only from these five property sites (Valuation Logic v2 §1A-B). */
+export const LISTING_DOMAINS = ['housing.com', '99acres.com', 'magicbricks.com', 'nobroker.in', 'squareyards.com'];
 /** Auction results kept for the extractor even when the other searches return many pages. */
 const MAX_AUCTION_SOURCES = 6;
 
@@ -78,7 +80,6 @@ const auctionPlatform = (u?: string): AuctionPlatform | null => {
 };
 const str = (v: unknown, max = 200) => (typeof v === 'string' && v.trim() && v.trim().toLowerCase() !== 'null' ? v.trim().slice(0, max) : undefined);
 const monthOf = (d?: string) => d?.match(/^\d{4}-\d{2}/)?.[0];
-const thisMonth = () => new Date().toISOString().slice(0, 7);
 
 /** Time budget for one market fetch (ms from the start); the route's maxDuration is 90 s. */
 export const MARKET_BUDGET = { geminiMs: 60_000, geocodeTrimMs: 62_000, geocodeStopMs: 75_000 };
@@ -106,11 +107,13 @@ function prompt(where: string, q: MarketQuery, sources: SearchResult[]) {
 
 From the search results, extract every INDIVIDUAL property price data point and any government guideline (circle / ready-reckoner) rate.
 Return a JSON array of objects with exactly these keys:
-{"source":"S<number>","category":"LAND|BUILT|GUIDELINE","kind":"LISTING|SALE|AUCTION|GUIDELINE","propertyType":"<as printed, e.g. residential plot, 3 BHK flat, independent house>","priceText":"<exact text or null>","areaText":"<exact text or null>","rateText":"<exact text or null>","locality":"<locality as printed or null>","dateText":"<date as printed or null>"}
+{"source":"S<number>","category":"LAND|BUILT|GUIDELINE","kind":"LISTING|SALE|AUCTION|GUIDELINE","propertyType":"<as printed, e.g. residential plot, 3 BHK flat, independent house, commercial shop>","priceText":"<exact text or null>","areaText":"<exact text or null>","rateText":"<exact text or null>","project":"<project / society / layout name as printed or null>","locality":"<locality as printed or null>","dateText":"<date as printed or null>"}
 
 Rules:
 - category LAND = plots / land; BUILT = houses, villas, flats, shops, offices, sheds (price relates to built-up area); GUIDELINE = government guideline / circle / ready reckoner rate.
-- priceText, areaText and rateText MUST be copied character-for-character from that source's TEXT (e.g. "₹15 Lac", "1200 sqft", "₹4,500/sqft"). Include unit words exactly as printed.
+- priceText, areaText and rateText MUST be copied character-for-character from that source's TEXT (e.g. "₹15 Lac", "1200 sqft", "₹4,500/sqft"). Include unit words exactly as printed, and the area basis words if printed next to the area (e.g. "1,250 sq.ft. super built-up", "850 sqft carpet").
+- propertyType: copy the usage words if printed (residential / commercial / industrial).
+- A locality-wide average or price-trend figure is allowed: keep words like "average" or "price trend" in rateText / propertyType exactly as printed.
 - One object per individual property or per stated rate. LISTING = for sale; SALE = completed / registered transaction; AUCTION = bank auction reserve price.
 - SKIP portal-wide "average price" summaries only if they have no locality. SKIP rentals. SKIP anything without a price or rate.
 - Pages from baanknet.com or ibapi.in are BANK AUCTION listings: kind AUCTION; priceText = the RESERVE PRICE exactly as printed (not the EMD, not the bid increment / "price during extension"); areaText = that property's area; dateText = the auction date if printed. SKIP the property if its reserve price is "N/A" or marked indicative. From a multi-property sale notice, include a property only if its own reserve price and its own area are printed together for that one property.
@@ -173,6 +176,9 @@ function validate(rows: unknown[], sources: SearchResult[], q: MarketQuery, reje
     const eff = rate ?? (price && area ? price / area : null);
     if (eff === null) return rejected.push({ title: src.title, url: src.url, reason: aq && !area ? `Area "${aq}" has no recognised unit` : 'No usable rate (needs a rate, or price + area)' });
     if (eff < MIN_RATE || eff > MAX_RATE) return rejected.push({ title: src.title, url: src.url, reason: `Rate ₹${Math.round(eff)}/sqft outside plausible range` });
+    // Date provenance: a printed date that really is in the source, else the page's publish date, else none (assumed).
+    const printedDate = dq && quoteInSource(dq, `${src.title} ${src.content}`) ? parseIndianDate(dq) : null;
+    const pageDate = monthOf(src.publishedDate);
     out.push({
       id: `live-${i + 1}`,
       category,
@@ -181,9 +187,10 @@ function validate(rows: unknown[], sources: SearchResult[], q: MarketQuery, reje
       areaSqft: area ?? undefined,
       ratePerSqft: rate ?? undefined,
       propertyType,
+      project: str(o.project, 100),
       locality: str(o.locality, 100) ?? printedLocality(src, q),
-      // A printed date (auction / registration) wins when it really is in the source; listings fall back to this month.
-      date: (dq && quoteInSource(dq, `${src.title} ${src.content}`) ? parseIndianDate(dq) : null) ?? monthOf(src.publishedDate) ?? (kind === 'LISTING' ? thisMonth() : undefined),
+      date: printedDate ?? pageDate,
+      dateSource: printedDate ? 'PRINTED' : pageDate ? 'PAGE' : 'ASSUMED',
       url: src.url,
       title: src.title,
       quote: [pq, aq, rq].filter(Boolean).join(' · '),
@@ -217,7 +224,8 @@ function regexExtract(sources: SearchResult[], q: MarketQuery): MarketPoint[] {
           ratePerSqft: m.rate,
           propertyType: `${category === 'LAND' ? 'plot / land' : category === 'BUILT' ? 'built property' : 'guideline'} (regex extraction)`,
           locality: printedLocality(s, q),
-          date: monthOf(s.publishedDate) ?? thisMonth(),
+          date: monthOf(s.publishedDate),
+          dateSource: monthOf(s.publishedDate) ? 'PAGE' : 'ASSUMED',
           url: s.url,
           title: s.title,
           quote: m.rateText,
@@ -252,8 +260,8 @@ export async function fetchMarketEvidence(q: MarketQuery): Promise<MarketEvidenc
   const query: MarketQuery = { ...q, locality, city, state };
 
   const { results, errors } = await tavilyMulti(tavilyKey, [
-    { q: `${LAND_ASSET[q.type]} for sale in ${loc} price per sq ft`, depth: 'advanced', max: 8 },
-    { q: `${BUILT_ASSET[q.type]} for sale in ${loc} price per sq ft`, depth: 'advanced', max: 8 },
+    { q: `${LAND_ASSET[q.type]} for sale in ${loc} price per sq ft`, depth: 'advanced', max: 8, domains: LISTING_DOMAINS },
+    { q: `${BUILT_ASSET[q.type]} for sale in ${loc} price per sq ft`, depth: 'advanced', max: 8, domains: LISTING_DOMAINS },
     { q: `${loc} ${state ?? ''} guideline value circle rate per sq ft`, depth: 'basic', max: 5 },
     // Bank auctions are sparse: search city-wide (points > 10 km from the pin are dropped by distance).
     ...auctionQueries(q.type, city || loc).map((x) => ({ q: x, depth: 'advanced' as const, max: 8, domains: AUCTION_DOMAINS })),
@@ -283,25 +291,31 @@ export async function fetchMarketEvidence(q: MarketQuery): Promise<MarketEvidenc
     }
   } else points = regexExtract(sources, query);
 
-  // Geocode distinct localities (Nominatim, ≤ 1 req/s) so distance from the pin can be measured.
+  // Geocode (Nominatim, ≤ 1 req/s) so distance from the pin can be measured: the project / society name with
+  // its locality first (exact), then the locality centre (marked approximate).
   const region = [city, state].filter(Boolean).join(', ');
-  const locs = [...new Set(points.map((p) => p.locality).filter((x): x is string => !!x))].slice(0, Date.now() - started > MARKET_BUDGET.geocodeTrimMs ? 2 : 6);
+  const tight = Date.now() - started > MARKET_BUDGET.geocodeTrimMs;
+  const place = (l: string) => (city && l.toLowerCase().includes(city.toLowerCase()) ? l : `${l}${region ? `, ${region}` : ''}`);
+  const projects = tight ? [] : [...new Set(points.filter((p) => p.project).map((p) => `${p.project}|${p.locality ?? ''}`))].slice(0, 4);
+  const locs = [...new Set(points.map((p) => p.locality).filter((x): x is string => !!x))].slice(0, tight ? 2 : 6);
   const coords = new Map<string, { lat: number; lng: number }>();
-  for (const l of locs) {
+  for (const key of [...projects.map((k) => `P:${k}`), ...locs.map((l) => `L:${l}`)]) {
     if (Date.now() - started > MARKET_BUDGET.geocodeStopMs) break;
     try {
-      const qq = city && l.toLowerCase().includes(city.toLowerCase()) ? l : `${l}${region ? `, ${region}` : ''}`;
-      const hit = (await geocodeSearch(qq, 1))[0];
-      if (hit) coords.set(l, { lat: hit.lat, lng: hit.lng });
+      const [proj, l] = key.slice(2).split('|');
+      const hit = (await geocodeSearch(key.startsWith('P:') ? place(`${proj}${l ? `, ${l}` : ''}`) : place(key.slice(2)), 1))[0];
+      if (hit) coords.set(key, { lat: hit.lat, lng: hit.lng });
     } catch {
       /* point kept without coordinates */
     }
   }
   for (const p of points) {
-    const c = p.locality ? coords.get(p.locality) : undefined;
+    const exact = p.project ? coords.get(`P:${p.project}|${p.locality ?? ''}`) : undefined;
+    const c = exact ?? (p.locality ? coords.get(`L:${p.locality}`) : undefined);
     if (c) {
       p.lat = c.lat;
       p.lng = c.lng;
+      p.approxLocation = !exact;
     }
   }
 

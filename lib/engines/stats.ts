@@ -18,10 +18,18 @@ export function stdDev(values: number[]): number {
   return Math.sqrt(values.reduce((s, v) => s + (v - m) ** 2, 0) / values.length);
 }
 
-/** CV = stdDev / mean */
+/** CV = stdDev / mean (population) */
 export function coefficientOfVariation(values: number[]): number {
   const m = mean(values);
   return m === 0 ? 0 : stdDev(values) / m;
+}
+
+/** Sample CV = s / mean with s = √(Σ(x − mean)² ÷ (n − 1)): unbiased for small samples. 0 when n < 2. */
+export function sampleCoefficientOfVariation(values: number[]): number {
+  const n = values.length;
+  const m = mean(values);
+  if (n < 2 || m === 0) return 0;
+  return Math.sqrt(values.reduce((s, v) => s + (v - m) ** 2, 0) / (n - 1)) / m;
 }
 
 /** w_i ∝ 1 / σ_i², normalised to sum 1. */
@@ -107,4 +115,36 @@ export function polygonSidesM(poly: [number, number][]): number[] {
 export function centroid(poly: [number, number][]): [number, number] | null {
   if (!poly.length) return null;
   return [mean(poly.map((p) => p[0])), mean(poly.map((p) => p[1]))];
+}
+
+/* ---------------- weighted statistics (Valuation Logic v2 §6–7) ---------------- */
+
+/** Weighted median: the value where the cumulative weight first reaches half (average of the two values on an exact tie). */
+export function weightedMedian(values: number[], weights: number[]): number {
+  const rows = values.map((v, i) => ({ v, w: Math.max(0, weights[i] ?? 0) })).sort((a, b) => a.v - b.v);
+  const total = rows.reduce((s, r) => s + r.w, 0);
+  if (!rows.length) return 0;
+  if (total <= 0) return median(values);
+  let cum = 0;
+  for (let i = 0; i < rows.length; i++) {
+    cum += rows[i].w;
+    if (Math.abs(cum - total / 2) <= total * 1e-12 && i + 1 < rows.length) return (rows[i].v + rows[i + 1].v) / 2;
+    if (cum >= total / 2) return rows[i].v;
+  }
+  return rows[rows.length - 1].v;
+}
+
+/** Effective number of points n_eff = (Σw)² ÷ Σw². */
+export function effectiveN(weights: number[]): number {
+  const s = weights.reduce((a, b) => a + b, 0);
+  const s2 = weights.reduce((a, b) => a + b * b, 0);
+  return s2 > 0 ? (s * s) / s2 : 0;
+}
+
+/** Sample standard deviation (divides by n − 1). 0 when n < 2. */
+export function sampleStdDev(values: number[]): number {
+  const n = values.length;
+  if (n < 2) return 0;
+  const m = mean(values);
+  return Math.sqrt(values.reduce((s, v) => s + (v - m) ** 2, 0) / (n - 1));
 }

@@ -1,0 +1,790 @@
+================================================================================
+PRAMAAN - PROCESS FLOW AND VALUATION LOGIC (BUILD v2)
+IDFC FIRST Bank - FAME 6.0 - LAP collateral valuation prototype
+================================================================================
+Portal      : https://pramaan-idfc.vercel.app  (bank portal + customer portal)
+Describes   : build v2 (28 Nov 2026) - Valuation Logic v2 market-rate engine,
+              Telangana IGRS government value, purchase-price component,
+              floor-wise area checked against the satellite top view.
+Code        : every number is computed by plain TypeScript:
+                lib/engines/  measure.ts, evidence.ts, purchase.ts,
+                              govValue.ts, hpi.ts, valuation.ts, sanity.ts,
+                              geofence.ts, evaluate.ts, stats.ts, parse.ts
+                config/valuation.ts  - every policy constant in one place
+              AI never computes, converts or estimates a number.
+
+CONTENTS
+  1. Overview and principles
+  2. End-to-end process (who does what)
+  3. Step 1  - Application, property facts, purchase price, documents
+  4. Step 2  - Location, plot boundary and geo-fence
+  5. Step 3  - Video inspection and snapshots
+  6. Step 4  - Measurement: land, floor-wise area, satellite check,
+               measurement confidence
+  7. Step 5  - Government value (Telangana IGRS / other states)
+  8. Step 6  - Market evidence (search, extraction, validation)
+  9. Step 7  - Market rate engine (cleaning, tiers, per-kind estimates,
+               consensus, local vs wider, 80% range)
+ 10. Step 8  - Final rate: market + purchase price + government floor
+ 11. Step 9  - Authenticity Score
+ 12. Step 10 - Valuation methods, value range and loan
+ 13. Step 11 - Technical checks (T1-T23) and verdict
+ 14. Step 12 - Report issue and sign-off
+ 15. Progress stages (bank and customer)
+ 16. Role of AI
+ 17. Policy constants (single reference table)
+ 18. Known limitations and what is not built yet
+
+
+--------------------------------------------------------------------------------
+1. OVERVIEW AND PRINCIPLES
+--------------------------------------------------------------------------------
+PRAMAAN values a property offered as security for a Loan Against Property (LAP)
+without a physical site visit. The bank officer:
+  - opens the case with the facts from the loan file (and, optionally, what the
+    customer paid for the property and what they claim it is worth),
+  - collects documents from the loan file and from the customer,
+  - confirms the location and draws the plot boundary on the satellite map,
+  - inspects the property on a live video call with the customer at the site,
+  - takes each floor's area from the floor plan and checks the total against
+    the building's roof outline on the satellite top view,
+  - adopts the official government value (Telangana) or links to the state
+    portal, and fetches market evidence around the property,
+  - lets the engines compute the rate, the value, the loan and the checks,
+  - issues a signed-off technical valuation report (PDF).
+
+Principles applied throughout:
+  a) Conservative by default: the lower of deed and satellite plot area, only
+     the approved structure, the lower LTV cap of declared vs observed usage,
+     the official government value as a floor, the loan on the lower edge of
+     the range when the range is wide.
+  b) Every number is traceable: formulas are shown with the numbers
+     substituted; every data point keeps its source link and the exact text
+     it was copied from; every government rate keeps its locality,
+     classification and effective date.
+  c) Uncertainty is shown, not hidden: every rate carries an 80% range, and
+     a single data point can no longer look certain.
+  d) Deterministic: the same inputs always give the same value.
+  e) AI only reads and copies printed text (search results, Index II). It
+     never estimates, converts or calculates.
+  f) No repeat KYC: identity is verified at loan onboarding. The video
+     inspection proves the photos were taken AT THE PLEDGED PROPERTY.
+
+
+--------------------------------------------------------------------------------
+2. END-TO-END PROCESS (WHO DOES WHAT)
+--------------------------------------------------------------------------------
+  #  Step                                  Bank portal tab     Done by
+  -- ------------------------------------- ------------------- ------------------
+  1  Open application, facts, purchase     New application     Bank officer
+     price and customer's claimed value
+  2  Documents (checklist per type)        Identification      Bank + customer
+  3  Pin + plot boundary on satellite      Identification      Bank officer
+  4  Video inspection + snapshots          Inspection &        Bank (call) +
+                                           measurement         customer
+  5  Floor-wise area from the floor plan,  Inspection &        Bank officer
+     roof outline, confidence score        measurement         (engine scores)
+  6  Government value                      Valuation           Bank picks row;
+     (Telangana IGRS lookup)                                   portal read live
+  7  Market evidence                       Valuation           System + review
+  8  Market rate, final rate, value, loan  Valuation           Engines (auto)
+  9  Technical checks and verdict          Technical checks    Engines + bank
+                                                               attestations
+  10 Report issue                          Report              Bank sign-off
+
+The customer portal shows progress in plain language, lets the customer upload
+the documents asked of them (including the floor plan), keep location on and
+answer the bank's video call. It never shows rupee values.
+
+
+--------------------------------------------------------------------------------
+3. STEP 1 - APPLICATION, PROPERTY FACTS, PURCHASE PRICE, DOCUMENTS
+--------------------------------------------------------------------------------
+3.1 Property types and how each is valued
+
+  Type                              Default usage  Default structure  Method
+  --------------------------------- -------------- ------------------ ----------------------
+  Independent house / bungalow      Residential    RCC                Land + Building (cost)
+  Flat / apartment                  Residential    RCC                Sales comparison
+  Open plot                         Residential    -                  Land only
+  Shop / office unit                Commercial     RCC                Sales comparison
+  Commercial building (with land)   Commercial     RCC                Land + Building (cost)
+  Factory / warehouse / shed        Industrial     Steel / PEB shed   Land + Building (cost)
+
+  Usage: Residential, Commercial, Mixed or Industrial.
+  Structure: RCC framed, load-bearing masonry, or steel / PEB shed.
+
+3.2 Facts entered by the bank (Identification -> Facts)
+  Address and pin, deed plot area, declared (deed) built-up area, floors,
+  age of the building, structure, construction rate (Rs./sqft, bank panel
+  rate), approved plan facts (approved BUA, approved floors, permissible FSI,
+  plan / permit no., authority) and the year the title chain starts.
+
+3.3 Purchase price and claimed value (new; on the new-application form and
+    in Identification -> Facts)
+  Field                          Notes
+  ------------------------------ ----------------------------------------------
+  How the customer got it        Purchased / Inherited / Gifted / Self-built.
+                                 Only "Purchased" feeds the purchase-price
+                                 component (section 10).
+  Month and year of purchase     Required if purchased.
+  Price paid (Rs.)               Consideration on the sale deed.
+  What the price covered         Plot only / Plot + building / Flat or unit
+                                 (decides which rate it is compared with).
+  Area bought + unit             Only if different from today's area
+                                 (sqft, sq yd, sq m).
+  Construction after purchase    Yes / no + year (for a plot-only purchase).
+  Sale deed document no.         Optional, for later verification.
+  Customer's claimed value       Cross-check only (check T20). NEVER used in
+                                 the value.
+
+3.4 Document checklist (generated per property type)
+  M = mandatory, R = recommended, - = not applicable
+
+  Document                                         House Flat Plot Shop Comm Ind
+  ------------------------------------------------ ----- ---- ---- ---- ---- ---
+  Registered sale deed (from loan file)              M    M    M    M    M    M
+  Chain of title documents (13 years)                M    M    M    M    M    M
+  Approved / sanctioned building plan                M    M    -    M    M    M
+  Floor plan (floor-wise areas)              [new]   R    R    -    R    R    R
+  Approved layout plan                               -    -    M    -    -    -
+  Encumbrance certificate (13 years)                 R    R    R    R    R    R
+  Land record extract (7/12, Patta, Khatauni)        R    -    R    -    R    R
+  Registration extract (Index II or equivalent)      R    R    R    R    R    R
+  Latest property tax receipt (customer)             R    R    R    R    R    R
+  Latest electricity bill (customer)                 R    R    -    R    R    R
+  Occupancy / completion certificate                 R    R    -    R    R    R
+  Society NOC / share certificate (customer)         -    R    -    R    -    -
+
+  Each slot is Pending -> Uploaded -> Verified, or Rejected (with a reason
+  shown to the customer). The bank can add extra document requests. Cases
+  opened before the floor-plan slot existed get it with "Ask the customer to
+  upload the floor plan" (or automatically when the plan source is set to
+  "customer upload").
+
+
+--------------------------------------------------------------------------------
+4. STEP 2 - LOCATION, PLOT BOUNDARY AND GEO-FENCE (geofence.ts)
+--------------------------------------------------------------------------------
+  - The bank confirms the property pin (address search with Google Places,
+    falling back to OpenStreetMap / Photon) and clicks the plot corners on the
+    satellite image.
+  - Satellite plot area = polygon area (sq m) x 10.7639.
+  - The plot polygon is also the geo-fence for the inspection photos.
+
+Geo-fence rule for each snapshot:
+  allowed radius = 25 m + min(GPS accuracy, 25 m)       (25 to 50 m)
+  INSIDE   inside the plot polygon, or within the allowed radius of the pin
+  NEAR     within 100 m of the pin (re-take advised)
+  OUTSIDE  more than 100 m from the pin
+  NO GPS   the photo has no location
+
+Overall: FAIL if any snapshot OUTSIDE; WARN if any NEAR / NO GPS or fewer than
+4 exterior views INSIDE; PASS otherwise; NO CAPTURE before any snapshot.
+
+
+--------------------------------------------------------------------------------
+5. STEP 3 - VIDEO INSPECTION AND SNAPSHOTS
+--------------------------------------------------------------------------------
+5.1 The call
+  - The officer presses "Call customer"; the customer's portal rings. On answer
+    the customer allows location first, then the camera (back camera).
+  - Peer-to-peer WebRTC video with a data channel; a TURN server is used when
+    networks block direct calls.
+  - Customer: mute / unmute, front / back camera, end call, call timer.
+  - Bank: mute, switch the customer's camera, shutter (or key S), frame grab,
+    portrait / landscape, full screen, hang up, typed / quick instructions.
+  - The customer's live location streams during the call (distance from the
+    pin shown live) and is stored every 15 seconds.
+
+5.2 Snapshots
+  - The shutter makes the CUSTOMER'S PHONE take a full-resolution photo,
+    tagged with the phone's GPS fix and a SHA-256 fingerprint ("phone
+    capture"). Fallback: a frame grabbed from the received video, tagged with
+    the last tracked location under 2 minutes old ("bank-side frame").
+  - Every snap lands in the SNAP TRAY first. The officer drags each snap onto
+    its designated view: Front elevation, Approach road, Left side, Right
+    side, Rear side, Electricity meter / name plate, and "Inside - <floor>"
+    for each floor; custom views can be added. One photo per view.
+  - Only snaps placed on a view count for the geo-fence, the stages and the
+    report.
+
+5.3 Observations recorded from the call
+  Floors seen, usage seen, occupancy (self-occupied / rented / vacant).
+  "Floors seen" is also the floor count used in the satellite area check.
+
+
+--------------------------------------------------------------------------------
+6. STEP 4 - MEASUREMENT (measure.ts)
+--------------------------------------------------------------------------------
+Room-wise measurement (tape / snapshot ruler) has been REMOVED. The building
+is measured floor by floor from its floor plan and checked from above.
+
+6.1 Land
+  Land area used  A_land = min(deed area, satellite plot polygon area)
+                  (either one alone if only one is available)
+  Plot variance   = (satellite - deed) / deed x 100   (tolerance +/-10%, T6)
+
+6.2 Floor-wise area from the floor plan
+  1. Plan source (recorded by the officer):
+       - Government website: the authority's approved plan, with the permit
+         number or portal link (file kept in "Approved building plan"), or
+       - Uploaded by the customer (file kept in "Floor plan").
+     The plan files open beside the table.
+  2. The officer types each floor's area as printed on the plan (Ground,
+     First, ... ; extra floors such as a basement can be added).
+  3. Basis printed on the plan: built-up / plinth (used as is) or carpet
+     (x 1.2 to built-up).
+       Floor BUA        = printed area x (1.2 if carpet, else 1)
+       Plan total BUA   = sum of the floor BUAs
+
+6.3 Independent check from the satellite top view (houses and buildings)
+  The officer clicks the corners of the building's ROOF (not the plot) on the
+  satellite image.
+       Footprint        = roof polygon area (sq m) x 10.7639
+       Floors used      = floors seen on the call; else declared floors;
+                          else the number of floors on the plan
+       Satellite BUA    = footprint x floors used
+       Delta            = (plan total - satellite BUA) / satellite BUA
+  Negative delta: more is built than the plan shows (possible extension).
+  Positive delta: the plan shows more than is visible from above.
+
+  Flats and shops sit inside a larger building, so a top view cannot measure
+  the unit: their plan area is checked against the built-up area on the deed
+  instead (Delta = (plan - deed) / deed).
+
+6.4 Measurement confidence score (0-100)
+  Part          Max  Rule
+  ------------- ---- -------------------------------------------------------
+  Agreement      70  |delta| <= 5% -> 70;  |delta| >= 30% -> 0;
+                     in between 70 x (1 - (|delta| - 5%) / 25%)
+  Floor count    15  floors on the plan = floors seen on the call -> 15;
+                     not seen but = declared floors -> 8; otherwise 0
+                     (units: 15)
+  Plan source    15  government copy, verified 15; government copy not yet
+                     verified 10; customer upload verified 10; customer
+                     upload not verified 5; no source 0
+  Band: 80+ HIGH (pass), 50-79 MEDIUM (condition), below 50 LOW (refer for
+  physical measurement) - see check T23.
+
+  Example A: Ground 960 + First 960 = 1,920 sqft (built-up, customer upload,
+  verified). Roof outline 960 sqft x 2 floors seen = 1,920 sqft.
+  Delta 0% -> 70 + 15 + 10 = 95 (HIGH).
+  Example B: same plan, roof 1,200 sqft x 2 = 2,400 sqft. Delta -20% ->
+  agreement 70 x (1 - 15/25) = 28; + 15 + 10 = 53 (MEDIUM, condition).
+  With an unverified customer plan: 28 + 15 + 5 = 48 (LOW, refer).
+
+6.5 Built-up area that is valued (only the approved structure)
+  Actual BUA = floor-plan total if entered, else the declared (deed) BUA.
+  BUA_valued =
+    - no approved plan on record ........... 0 (building not valued)
+    - approved, nothing entered yet ........ approved BUA
+    - otherwise ............................ min(actual BUA, approved BUA)
+  Deviation vs plan = (actual - approved) / approved x 100   (check T7)
+  FSI (houses / buildings) = actual BUA / land area           (check T9)
+
+
+--------------------------------------------------------------------------------
+7. STEP 5 - GOVERNMENT VALUE (govValue.ts, lib/live/igrsTelangana.ts)
+--------------------------------------------------------------------------------
+The government value (guideline / circle / market value for stamp duty) is a
+MINIMUM for stamp duty, not a price estimate. It is shown beside the market
+rate, used as a FLOOR when it is official, and has weight 0 in the rate.
+
+7.1 Which properties get the Telangana lookup
+  A property is treated as Telangana if its recorded state says Telangana;
+  if no state is recorded, if the address mentions Telangana, Hyderabad or
+  Secunderabad, or carries a PIN code 50xxxx. Only these cases show the IGRS
+  Market Value Search card.
+
+7.2 Telangana IGRS Market Value Search (registration.telangana.gov.in)
+  Public, no login, no captcha. Read live by the server and parsed in code:
+    1. Search by: Land value (Rs. per sq yd) - plots, houses, buildings -
+       or Apartment value (Rs. per sqft) - flats, shops.
+    2. District -> Mandal -> Village / town (pre-selected from the address
+       where the names match). Hyderabad district: Division + at least 3
+       letters of the locality, then the matching locality.
+    3. "Get market values" lists every row: locality, ward-block, land value
+       per sq yd (or apartment value for ground / first / other floors),
+       classification (01 Residential / 02 Commercial) and effective date.
+       Rows matching the declared usage are highlighted.
+    4. The officer clicks "Use" on the row for the property's street /
+       locality. The server reads the row again (from its cache or the
+       portal) - the stored rate always comes from the portal, never from the
+       browser - and saves it as the case's OFFICIAL government value:
+          land value  Rs./sqft = Rs. per sq yd / 9
+          apartment   Rs./sqft as published (floor chosen by the officer)
+       One land value and one apartment value per case; a new "Use"
+       replaces the old one. Official values are kept when the market
+       search is run again.
+  Lists and rates are cached for 30 days (rates change only on official
+  revision); the read date is shown.
+  Example: Kokapet village main roads, 01 (Residential), Rs.27,000 per sq yd,
+  effective 05/06/2026 -> Rs.3,000 per sqft.
+
+7.3 Other states
+  The card shows a link to the official portal where one is known
+  (Maharashtra IGR ready reckoner, Karnataka Kaveri, Tamil Nadu TNREGINET,
+  Andhra Pradesh IGRS, Gujarat GARVI, Uttarakhand, Uttar Pradesh IGRS, Delhi
+  revenue department). The officer may enter the rate as a manual
+  "Guideline" point. For any other state the card is not shown.
+  Outside Telangana the guideline rate found by the web search (median of the
+  guideline points) is used for the T14 check only - NOT as a floor.
+
+
+--------------------------------------------------------------------------------
+8. STEP 6 - MARKET EVIDENCE (lib/server/market.ts)
+--------------------------------------------------------------------------------
+8.1 Live search ("Fetch market evidence", Valuation tab)
+  Real-time web search (Tavily) around the property's locality / city:
+    1) "<land asset> for sale in <locality city> price per sq ft"
+    2) "<built asset> for sale in <locality city> price per sq ft"
+       Both LIMITED to the five property sites: housing.com, 99acres.com,
+       magicbricks.com, nobroker.in, squareyards.com.
+    3) "<locality city state> guideline value circle rate per sq ft" (open)
+    4) Bank e-auctions, limited to baanknet.com and ibapi.in, city-wide.
+  Up to 16 ordinary results plus up to 6 auction pages, 800 characters each.
+  Social media and catalogue sites are rejected.
+
+8.2 Extraction (copy only)
+  Gemini (gemini-flash-lite-latest, fallback gemini-flash-latest) must COPY
+  for each individual property or stated rate: category (land / built /
+  guideline), kind (listing / sale / auction / guideline), property type with
+  its usage words, price, area (with basis words such as "super built-up" or
+  "carpet" when printed), rate, project / society name, locality and date -
+  exactly as printed. Locality averages and price trends may be copied with
+  their words ("average", "price trend"). Auction pages: the reserve price
+  only; "N/A" / indicative prices are skipped.
+
+8.3 Validation (deterministic)
+  - Every copied price / area / rate must appear verbatim in its source.
+  - Units parsed in code (Cr / Lakh / K; sqft / sq yd / sq m / acre /
+    hectare / guntha; Devanagari digits). Rate = printed rate, else
+    price / area; Rs.100 - Rs.5,00,000 per sqft.
+  - Date provenance:
+        PRINTED  a date printed in the source (checked verbatim),
+        PAGE     the page's published month,
+        ASSUMED  no date at all - the point is scored as 12 months old.
+    (Listings are no longer stamped with the current month.)
+  - Each rejected result is listed with its reason. Without Gemini a regex
+    parser keeps explicit "Rs X / sqft" rates only.
+
+8.4 Location of each point
+  Geocoded with OpenStreetMap: the project / society name with its locality
+  first (exact), then the locality centre (marked "approx. location").
+
+8.5 Bank-added evidence (kept when the search is run again)
+  - Registered sale from Index II (Maharashtra): the valuer downloads the
+    Index II from IGR's free search (captcha solved by the valuer; never
+    automated), uploads it, Gemini copies the fields, code parses amounts /
+    area / date, the valuer confirms every field.
+  - Manual comparable (land / built / guideline; sale / listing / auction).
+  - The reviewer can tick any point in or out, or delete it.
+
+
+--------------------------------------------------------------------------------
+9. STEP 7 - MARKET RATE ENGINE (evidence.ts) - "component B"
+--------------------------------------------------------------------------------
+Land rates (Rs./sqft of plot) and built rates (Rs./sqft of built-up area) are
+computed separately. Government values never enter this rate.
+
+9.1 Cleaning - points pass these steps in order; each dropped point is
+    listed with its reason
+   1. Reviewer exclusion.
+   2. Usable rate: no rate, or outside Rs.100 - Rs.5,00,000 per sqft.
+   3. Area basis (flats and shops only): a super built-up rate x 1.25, a
+      carpet rate / 1.2, built-up as is. Basis not printed: assumed super
+      built-up (x 1.25) and tau + 0.02. Manual entries are taken as built-up.
+   4. Usage match: comparables must share the subject's usage (a mixed-use
+      subject accepts residential and commercial). Usage is read from the
+      printed property type; unknown usage is kept.
+   5. Type match (built rates): flat / independent house / shop or office /
+      commercial building / industrial shed must match the subject type;
+      unknown type is kept.
+   6. Date provenance (section 8.3); assumed dates count as 12 months.
+   7. Granularity: a listing whose copied text says "average", "avg" or
+      "price trend" is a LOCALITY AVERAGE and weighs as 3 points.
+   8. Duplicates: same link and rate; same registration document number; or
+      same locality with rate within 1% AND area within 2%.
+   9. Distance: more than 10 km from the pin is dropped (unknown is kept as
+      tier T3). Bank auctions are used only in tiers T1 / T2.
+  10. Registered sales declared AT the government value (consideration
+      within +/-5% of the government value on the same deed) are kept out of
+      the rate - they do not show the real price.
+  11. Outliers per category + kind (4+ points), on the log of the corrected
+      rate:  |ln r - median(ln r)| > 3 x 1.4826 x MAD(ln r)  -> dropped.
+  12. Misread band: below 30% or above 300% of the category median (3+).
+
+9.2 Corrections to a closing price, and systematic error tau
+  Kind                       Correction                     tau
+  -------------------------- ------------------------------ -----
+  Registered / reported sale x k_reg (1.00)                  0.05
+  Portal listing             x (1 - 0.14) = x 0.86           0.06
+  Bank auction (reserve)     / 0.80                          0.10
+  tau add-ons, +0.02 each: area basis not printed; no guideline adjustment
+  (tier T2 / T3); no price index (sale / auction older than 6 months, or
+  commercial / industrial older than 12 months).
+  Time adjustment with the RBI House Price Index is built in
+  (r_today = r_then x HPI_latest / HPI_quarter_of_sale) but the index table
+  is not loaded yet, so the tau add-on applies instead.
+  Location adjustment for T2 / T3 points: x G_subject / G_comparable,
+  ratio capped 0.67-1.5 (outside = a different market, dropped). It applies
+  only when both guideline rates are known.
+
+9.3 Locality tiers and point weights
+  Tier  Which points                                          Tier weight
+  ----- ----------------------------------------------------- -----------
+  T1    same locality name as the subject, or within 1.5 km   1.00
+  T2    within 5 km                                           0.50
+  T3    within 10 km, or distance unknown                     0.25
+  Point weight  w = tier weight x 0.5^(age in months / 12) x (3 if locality
+                average, else 1)   - halves every 12 months.
+  Effective number of points  n_eff = (sum w)^2 / sum w^2
+
+9.4 Estimate per source kind k (sale, listing, auction)
+  r_k    = WEIGHTED MEDIAN of the corrected rates
+  s_k    = relative spread:
+             4+ points  : 1.4826 x weighted MAD / r_k        (robust)
+             2-3 points : SAMPLE standard deviation (n - 1) / mean
+             1 point    : standard error taken as 15%
+  SE_k   = 1.25 x s_k / sqrt(n_eff,k)      (1.25 = median's efficiency)
+  tau_k  = weighted mean tau of its points
+  sigma_k = r_k x sqrt(SE_k^2 + tau_k^2)
+
+9.5 Consensus across kinds
+  R = sum(r_k / sigma_k^2) / sum(1 / sigma_k^2)
+  u = 1 / sqrt(sum(1 / sigma_k^2))                (as a share of R)
+  Disagreement test  Q = sum((r_k - R)^2 / sigma_k^2). With K kinds, if
+  Q > K - 1 the uncertainty is widened by sqrt(Q / (K - 1)): when sales and
+  listings point to different rates the range grows instead of hiding it.
+
+9.6 Local rate blended with the wider rate
+  R and u are computed twice: T1 points only (R_T1, u_T1) and all tiers
+  (R_all, u_all).
+     n_eff(T1) = sum over kinds of n_eff,k of the T1 points
+     Z       = n_eff(T1) / (n_eff(T1) + 5)
+     R_market = Z x R_T1 + (1 - Z) x R_all       (rounded to Rs.10)
+     u_market = Z x u_T1 + (1 - Z) x u_all
+  No T1 points: Z = 0.
+  80% range = R_market +/- 1.28 x u_market x R_market
+  Thin market: n_eff of T1 + T2 below 2 (check T13 refers the case).
+
+9.7 Worked example (Valuation Logic v2 doc, verified by automated test)
+  T1 sales 4,900 / 5,150 / 5,300 (6, 14, 20 months old): weighted median
+  5,150, n_eff 2.7, sample-SD spread 3.95%, SE 3.0%, sigma 5.8%.
+  T1 listings 6,200 / 6,000 / 6,500 x 0.86: r = 5,332, n_eff 3.0, sigma 6.7%.
+  R_T1 = 5,226, u 4.4%, Q = 0.15 (kinds agree). n_eff(T1) = 5.7 -> Z = 0.53.
+  With the wider points added: R about 5,230, range about 4,940 - 5,520.
+  One listing alone: u = sqrt(0.15^2 + 0.06^2) = 16.2% -> range about +/-21%
+  and Agreement about 10 (v1 showed a zero-width range and full Agreement).
+
+9.8 Registered-sale and auction cross-checks (not part of R)
+  - Registered sales carrying both values: share declared below the
+    government value, and share declared at it (check T17).
+  - Auction benchmark: median reserve of auctions within 10 km vs PRAMAAN's
+    forced-sale rate (80% x rate); below 70% "review the FSV", above 130%
+    "FSV looks conservative".
+
+
+--------------------------------------------------------------------------------
+10. STEP 8 - FINAL RATE: MARKET + PURCHASE PRICE + GOVERNMENT FLOOR
+    (purchase.ts)
+--------------------------------------------------------------------------------
+  A. Government value   official (IGRS) only: floor, weight 0
+  B. Market rate        R_market, u_market (section 9)
+  C. Purchase price     the customer's own purchase brought to today
+
+10.1 Component C (only if acquired by purchase, with month, price and what
+     the price covered)
+  years     = months since the purchase month / 12
+  index     = HPI_now / HPI_purchase if the city's index is loaded, else
+              (1 + 6%)^years   (growth rate to be calibrated)
+  Plot only        -> land rate:  R_C = price x index / area
+                      (area bought, else deed plot area)
+  Flat / unit      -> built rate: R_C = price x index / area
+                      (area bought, else deed built-up area)
+  Plot + building  -> land rate:  the building as it was at purchase is
+                      taken out:
+                      building_then = BUA x construction rate x (1 - D_then),
+                      D_then = depreciation at (today's age - years)
+                      R_C = (price x index - building_then) / plot area
+  u_C = min(30%, 8% + 2% x years) + 5% while self-declared (the 5% is
+        dropped once the sale deed is verified)
+  C must match the property: a plot purchase is not compared with a flat
+  rate and vice versa; if inputs are missing the reason is shown (T21
+  pending).
+
+10.2 Blend
+  w_C = (1/u_C^2) / (1/u_B^2 + 1/u_C^2), capped at 30%;   w_B = 1 - w_C
+  R   = w_B x R_market + w_C x R_C
+  u   = sqrt((w_B x u_B)^2 + (w_C x u_C)^2)
+  Floor: if an OFFICIAL government value exists and R is below it, R = G.
+  Final rate rounded to Rs.10; 80% range = R +/- 1.28 x u x R.
+  Divergence: |R_C - R_market| / R_market above 30% -> check T21 warns.
+
+10.3 Worked examples
+  Doc example (verified by test): R_market 5,332 (u 6.4%); purchase 5.4
+  years ago at Rs.4,000/sqft, 7% growth -> R_C 5,764 (u 23.8%).
+  Weights 93% / 7%  ->  R = 5,360, range 4,940 - 5,790; floor 2,778 not hit.
+  A purchase one year old (u_C 15%) would get about 15% weight.
+
+  Live test case (Kokapet plot, 1,800 sqft, illustrative comparables):
+    A  IGRS Rs.27,000 per sq yd -> Rs.3,000/sqft (floor)
+    B  market Rs.8,310/sqft, u 7.1%, range 7,560 - 9,070
+    C  Rs.72 lakh in June 2021 -> 5.42 yrs x 1.06^yrs -> Rs.5,484/sqft,
+       u 23.8%
+    Weights 92% / 8% -> rate Rs.8,080/sqft, range 7,380 - 8,790
+    MV 1,800 x 8,080 = Rs.1,45,44,000 (range 1.33 - 1.58 Cr);
+    max loan 70% = Rs.1,01,80,800. T21 warns: purchase and market 34% apart.
+
+
+--------------------------------------------------------------------------------
+11. STEP 9 - AUTHENTICITY SCORE (0-100, per land and built market rate)
+--------------------------------------------------------------------------------
+How far the market rate can be trusted. Same four parts and maximums as
+before, so routing (80 / 60) and check T13 still apply.
+
+  Part       Max  Rule
+  ---------- ---- ---------------------------------------------------------
+  Agreement   35  from u_market: <= 6% -> 35; >= 20% -> 0; straight line
+                  between. Disagreement between kinds is already inside u
+                  (through Q).
+  Depth       25  20 x min(1, n_eff / 12), plus 5 when at least two
+                  independent kinds each have n_eff >= 2 (e.g. registered
+                  sales and listings)
+  Recency     20  weighted median age: <= 3 months -> 20; >= 24 -> 0;
+                  assumed dates count as 12 months
+  Spatial     20  20 x (1.0 x weight share in T1 + 0.6 x share in T2 +
+                  0.2 x share in T3)
+  Doc example: Agreement 35 (u 4.3%), Depth 20 x 8.0/12 + 5 = 18.3, Recency
+  about 17, Spatial 20 x (0.64 + 0.6 x 0.36) = 17.1 -> about 87.
+
+
+--------------------------------------------------------------------------------
+12. STEP 10 - VALUATION METHODS, VALUE RANGE AND LOAN (valuation.ts)
+--------------------------------------------------------------------------------
+12.1 Residual life and depreciation
+  Economic life: RCC 60, load-bearing 50, steel shed 30 years.
+  Residual life = economic life - age
+  D = min(85%, age / economic life x (1 - 10% salvage))
+
+12.2 Methods (rates are the FINAL rates of section 10)
+  Land + Building (house, commercial building, industrial):
+     LV = A_land x R_land;  BV = BUA_valued x construction rate x (1 - D)
+     MV = LV + BV                                         <- adopted
+     Cross-check MV_B = BUA_valued x R_built; variance > 20% flagged.
+  Sales comparison (flat, shop / office):  MV = BUA_valued x R_built
+  Land only (open plot):                    MV = A_land x R_land
+
+12.3 Value range
+  The 80% rate range is carried into MV. For the cost method only the land
+  part moves; the depreciated building value stays fixed.
+
+12.4 Forced-sale value and loan
+  FSV = 80% x MV
+  Max loan = LTV cap x MV; LTV caps (illustrative): Residential 70%,
+  Commercial 60%, Mixed 55%, Industrial 50%; the LOWER cap of declared and
+  observed usage is applied.
+  Wide-range rule: if u of the rate is above 15%, the max loan is sized on
+  the LOWER edge of the MV range. MV in the report stays the central value.
+  The final sanction is the lower of this and the cash-flow limit (outside
+  PRAMAAN).
+
+
+--------------------------------------------------------------------------------
+13. STEP 11 - TECHNICAL CHECKS AND VERDICT (sanity.ts)
+--------------------------------------------------------------------------------
+Each check is PASS, WARN (condition), BLOCKER or PENDING, with a finding and
+an action.
+
+  ID   Check                              Rule
+  ---- ---------------------------------- ------------------------------------
+  T1   Registered sale deed               verified PASS; received PENDING;
+                                          missing / rejected BLOCKER
+  T2   Title chain (13 years)             >= 13 years and verified PASS;
+                                          shorter or missing WARN
+  T3   Approved building / layout plan    verified PASS; received PENDING;
+                                          missing BLOCKER
+  T4   Encumbrance certificate            verified PASS; missing WARN
+  T5   Photos taken at the property       geo-fence PASS / WARN / FAIL
+  T6   Plot area - deed vs satellite      within +/-10% PASS, else WARN
+  T7   Built-up area vs approved plan     floor-plan (else declared) BUA vs
+                                          approved: <= 10% PASS, <= 30% WARN,
+                                          > 30% BLOCKER
+  T23  Floor-plan area vs satellite top   measurement confidence >= 80 PASS,
+       view (units: vs deed area)  [new]  50-79 WARN, < 50 BLOCKER; PENDING
+                                          until the plan and roof are entered
+  T8   Floors seen vs approved floors     more floors than approved BLOCKER
+  T9   FSI / FAR                          over permissible: up to 10% WARN,
+                                          more BLOCKER
+  T10  Demolition / unauthorised list     bank attests; affected BLOCKER
+  T11  Road widening / setback            bank attests; affected BLOCKER
+  T12  Usage - declared vs seen           mismatch WARN (lower LTV applied)
+  T13  Market evidence depth   [changed]  score >= 60 and n_eff >= 3 PASS;
+                                          score < 60 or n_eff < 3 WARN;
+                                          n_eff of T1 + T2 < 2 or u > 25%
+                                          BLOCKER (physical check)
+  T14  Guideline-rate floor    [changed]  market rate (before the floor) >=
+                                          government value PASS, else WARN;
+                                          source shown (official IGRS or web)
+  T15  Residual life                      >= 20 years PASS, else WARN
+  T16  Rejected documents                 any rejected WARN
+  T17  Registered sales vs govt value     any declared below WARN; share
+       [extended]                         declared at the government value
+                                          shown
+  T18  Local premium           [new]      R_T1 / R_all outside 0.75-1.25
+                                          while n_eff(T1) < 6 WARN
+  T20  Customer's claimed value [new]     claim above MV by > 25% WARN
+  T21  Own purchase price, indexed [new]  R_C vs market > 30% apart WARN;
+                                          incomplete purchase data PENDING
+
+Verdict:
+  any BLOCKER ............ Refer - resolve before sanction
+  else any PENDING ....... In progress
+  else any WARN .......... Clear with conditions
+  else ................... Clear
+
+
+--------------------------------------------------------------------------------
+14. STEP 12 - REPORT ISSUE AND SIGN-OFF
+--------------------------------------------------------------------------------
+  - The report can be issued only when the market value is computed.
+  - With BLOCKERS the officer must record how they are handled (remarks of at
+    least 10 characters) before issuing. Issuing records officer, time and
+    remarks; it can be reopened.
+  - PDF sections: 1 Application & property, 2 Valuation summary,
+    3 Calculation (every formula), 4 Measurement (floor-wise table, check
+    area, measurement confidence), 5 Market evidence (sources, per-kind
+    rates, local vs wider, 80% range, government value, purchase price,
+    rate used, Authenticity Score), 6 Site inspection, 7 Documents,
+    8 Technical remarks, 9 Bank remarks & sign-off.
+
+
+--------------------------------------------------------------------------------
+15. PROGRESS STAGES (bank and customer)
+--------------------------------------------------------------------------------
+  Stage                     Done when
+  ------------------------- ---------------------------------------------------
+  Application opened        always
+  Documents                 all mandatory documents verified
+  Location & video          geo-fence PASS (and an interior view inside the
+  inspection                fence for built properties)
+  Measurement               built: floor-wise areas entered AND a measurement
+                            confidence score exists (roof outline drawn, or
+                            deed area for units) AND land area known (not for
+                            units); plot: land area known and boundary drawn
+  Valuation                 market value computed
+  Technical review & report report issued
+  The customer sees the same stages in plain language, without values.
+
+
+--------------------------------------------------------------------------------
+16. ROLE OF AI
+--------------------------------------------------------------------------------
+  Uses AI (Google Gemini, copy-only):
+    - reading search results into data points (text copied as printed)
+    - reading an uploaded Index II into form fields for the valuer to check
+  Does NOT use AI:
+    - the Telangana IGRS rates (structured pages parsed by code)
+    - unit, area, rate and date parsing; area basis; usage / type matching
+    - cleaning, tiers, weights, per-kind estimates, consensus, range
+    - purchase-price indexing, blend, floor
+    - floor-wise area, satellite footprint, measurement confidence
+    - depreciation, market value, FSV, LTV, loan; checks and verdict
+  Safeguards: every copied number must exist verbatim in its source; Index II
+  fields are confirmed by the valuer; government rates are re-read on the
+  server before they are stored.
+
+
+--------------------------------------------------------------------------------
+17. POLICY CONSTANTS (config/valuation.ts and engines; all to be calibrated)
+--------------------------------------------------------------------------------
+  Valuation
+    Economic life (years)            RCC 60 / load-bearing 50 / steel shed 30
+    Salvage / max depreciation       10% / 85%
+    Forced-sale value                80% of MV
+    LTV cap                          Res 70% / Comm 60% / Mixed 55% / Ind 50%
+    Method variance flag             20%
+    Wide-range loan rule             u above 15% -> loan on the lower edge
+  Measurement
+    Carpet -> built-up               x 1.2
+    Plot area tolerance              +/-10%
+    Area agreement full / zero       |delta| 5% / 30%
+    Confidence points                agreement 70, floors 15 (8 declared
+                                     only), source 15/10/10/5
+    Confidence bands                 80+ pass, 50-79 condition, < 50 refer
+  Market evidence
+    Listing discount / auction ratio 14% / 0.80;  k_reg 1.00
+    tau sale / listing / auction     0.05 / 0.06 / 0.10;  add-on +0.02 each
+    Single-point standard error      15%
+    Tiers T1 / T2 / T3               1.5 / 5 / 10 km;  weights 1 / 0.5 / 0.25
+    Recency half-life                12 months;  undated = 12 months
+    Locality-average multiplier      3
+    Guideline ratio cap              0.67 - 1.5
+    At-guideline band                +/-5%
+    Outliers                         3 robust SD on log-rate, 4+ points
+    Misread band                     < 30% or > 300% of category median
+    Local blend constant k           5
+    Range                            +/-1.28 u (80%)
+    Rate accepted                    Rs.100 - Rs.5,00,000 per sqft
+    Listing sites                    housing.com, 99acres, magicbricks,
+                                     nobroker, squareyards
+  Authenticity Score
+    Agreement full / zero            u 6% / 20%
+    Depth full                       n_eff 12 (+5 for two kinds n_eff >= 2)
+    Recency full / zero              3 / 24 months
+    Spatial credit T1 / T2 / T3      1.0 / 0.6 / 0.2
+  Purchase price (component C)
+    Growth without a price index     6% a year
+    u_C                              min(30%, 8% + 2% x years) + 5% if
+                                     self-declared
+    Max weight of C                  30%
+    Divergence warning               30%
+  Government value
+    Weight in the rate               0 (floor only, official values only)
+    Telangana land value             per sq yd / 9
+    Cache                            30 days
+  Checks
+    Title chain                      13 years
+    BUA deviation                    WARN > 10%, BLOCKER > 30%
+    FSI over permissible             BLOCKER > 10%
+    T13                              score 60, n_eff 3; block n_eff(T1+T2)
+                                     < 2 or u > 25%
+    T18 local premium                0.75 - 1.25 while n_eff(T1) < 6
+    T20 claim gap                    +25%
+    Minimum residual life            20 years
+  Geo-fence
+    Base radius + accuracy credit    25 m + up to 25 m
+    NEAR / OUTSIDE                   <= 100 m / > 100 m
+    Exterior views needed            4
+
+
+--------------------------------------------------------------------------------
+18. KNOWN LIMITATIONS AND WHAT IS NOT BUILT YET
+--------------------------------------------------------------------------------
+  1. Constants are starting points, not calibrated bank policy (listing
+     discount, tau, tiers, growth rate, confidence bands, LTV caps).
+  2. The RBI House Price Index table is empty: old sales are not
+     time-adjusted (they carry tau + 0.02) and the purchase price grows at a
+     flat 6% a year.
+  3. Guideline rates of comparable localities are not collected, so the
+     location adjustment for T2 / T3 points rarely applies and those points
+     carry tau + 0.02.
+  4. Distances are to the project or locality centre named in the source,
+     not to the exact listed property.
+  5. Telangana registered sales (Encumbrance Search after officer login) are
+     Phase 2 and not built; Index II (Maharashtra) is entered by the valuer.
+     The IGRS parser depends on the portal's current page layout; if it
+     changes, the officer uses the portal link and enters the rate manually.
+  6. Not built yet: thin-market guideline-ratio fallback, T19 (market-to-
+     guideline ratio vs district median), T22 (deed vs EC vs site
+     boundaries).
+  7. Satellite check: the roof outline includes balconies and overhangs;
+     buildings with smaller upper floors, trees or shade over the roof, and
+     an unrecorded floor count all widen the delta. Flats and shops are
+     checked against the deed area only.
+  8. The purchase price and claimed value are self-declared until the sale
+     deed is verified.
+  9. Demolition lists and road-widening plans have no connected data source;
+     the bank attests them (T10, T11).
+================================================================================

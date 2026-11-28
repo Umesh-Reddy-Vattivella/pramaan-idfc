@@ -4,8 +4,10 @@
    ------------------------------------------------------------------ */
 import type { Application, Structure, Usage } from '@/lib/domain/types';
 import { hasLand, isUnit, USAGE_LABEL } from '@/lib/domain/catalog';
+import { VALUATION as V } from '@/config/valuation';
 import type { EvidenceResult } from './evidence';
 import type { MeasureResult } from './measure';
+import type { FinalRate, FinalRates } from './purchase';
 import { formatIndianNumber, inr, toIndianRupeeWords } from './format';
 
 /** Economic life by structure type (years). */
@@ -70,19 +72,40 @@ export interface ValuationResult {
   landRate: number | null;
   builtRate: number | null;
   guidelineRate: number | null;
+  /** MV at the edges of the 80% rate range (cost method: only the land part moves). */
+  mvLow: number | null;
+  mvHigh: number | null;
+  /** u ÷ R of the primary rate. */
+  uPrimary: number | null;
+  /** u ÷ R above 15%: the maximum loan is sized on the lower edge. */
+  wideRange: boolean;
 }
 
 const r = (n: number) => formatIndianNumber(Math.round(n));
 
-export function runValuation(a: Application, m: MeasureResult, ev: EvidenceResult): ValuationResult {
+function rateLine(label: string, f: FinalRate): FormulaLine | null {
+  if (!f.purchase && !f.floorApplied) return null;
+  const parts = [`${(f.wMarket * 100).toFixed(0)}% × market ₹${r(f.market.rawRate)}`];
+  if (f.purchase) parts.push(`${(f.wPurchase * 100).toFixed(0)}% × own price ₹${r(f.purchase.rate)}`);
+  return {
+    label,
+    formula: `R = max(w_B × R_B + w_C × R_C, G)${f.capped ? ` — C capped at ${V.purchase.maxWeight * 100}%` : ''}`,
+    working: `${parts.join(' + ')}${f.floorApplied ? ` → below the official value, floor ₹${r(f.guideline!.rate)}` : ''}`,
+    result: `₹${r(f.rate)}/sqft (80% range ₹${r(f.low)}–₹${r(f.high)})`,
+  };
+}
+
+export function runValuation(a: Application, m: MeasureResult, ev: EvidenceResult, rates?: FinalRates): ValuationResult {
   const p = a.property;
   const method: Method = p.type === 'PLOT' ? 'LAND_ONLY' : isUnit(p.type) ? 'SALES_COMPARISON' : 'LAND_BUILDING';
   const missing: string[] = [];
   const lines: FormulaLine[] = [];
   const usageForLtv = conservativeUsage(p.usage, a.inspection.observedUsage);
   const ltvCap = LTV_CAP[usageForLtv];
-  const landRate = ev.land?.rate ?? null;
-  const builtRate = ev.built?.rate ?? null;
+  const fLand = rates ? rates.LAND : null;
+  const fBuilt = rates ? rates.BUILT : null;
+  const landRate = rates ? (fLand?.rate ?? null) : (ev.land?.rate ?? null);
+  const builtRate = rates ? (fBuilt?.rate ?? null) : (ev.built?.rate ?? null);
 
   let totalLife: number | null = null;
   let residual: number | null = null;
@@ -115,6 +138,8 @@ export function runValuation(a: Application, m: MeasureResult, ev: EvidenceResul
     if (!landRate) missing.push('Land rate from market evidence');
     if (m.landAreaSqft && landRate) {
       landValue = m.landAreaSqft * landRate;
+      const rl = fLand && rateLine('Land rate adopted', fLand);
+      if (rl) lines.push(rl);
       lines.push({
         label: 'Land area used',
         formula: 'A_land = min(deed area, satellite area)',
@@ -156,6 +181,8 @@ export function runValuation(a: Application, m: MeasureResult, ev: EvidenceResul
     if (isUnit(p.type) && m.buaValuedSqft <= 0) missing.push(m.approvedBuaSqft ? 'Built-up area' : 'Approved plan built-up area');
     if (builtRate && m.buaValuedSqft > 0) {
       comparisonMV = m.buaValuedSqft * builtRate;
+      const rl = isUnit(p.type) && fBuilt && rateLine('Built rate adopted', fBuilt);
+      if (rl) lines.push(rl);
       if (isUnit(p.type)) lines.push({ label: 'Built-up area valued', formula: 'BUA_valued = min(actual BUA, approved BUA)', working: m.buaValuedBasis, result: `${r(m.buaValuedSqft)} sqft` });
       lines.push({
         label: isUnit(p.type) ? 'Market value — sales comparison' : 'Cross-check — sales comparison',
@@ -172,17 +199,35 @@ export function runValuation(a: Application, m: MeasureResult, ev: EvidenceResul
     lines.push({ label: 'Method variance', formula: '|MV_A − MV_B| ÷ MV_A', working: `|${inr(costMV!)} − ${inr(comparisonMV!)}| ÷ ${inr(costMV!)}`, result: `${methodVariancePct.toFixed(1)}%${methodVariancePct > METHOD_VARIANCE_WARN_PCT ? ' (above 20% — review)' : ''}` });
   }
 
+  // 80% range of MV: the rate range carried through; for the cost method only the land part moves.
+  const primary = method === 'SALES_COMPARISON' ? fBuilt : fLand;
+  let mvLow: number | null = null;
+  let mvHigh: number | null = null;
+  if (mv !== null && mv > 0 && primary) {
+    if (method === 'SALES_COMPARISON') {
+      mvLow = m.buaValuedSqft * primary.low;
+      mvHigh = m.buaValuedSqft * primary.high;
+    } else if (m.landAreaSqft) {
+      mvLow = m.landAreaSqft * primary.low + (buildingValue ?? 0);
+      mvHigh = m.landAreaSqft * primary.high + (buildingValue ?? 0);
+    }
+  }
+  const uPrimary = primary?.u ?? null;
+  const wideRange = uPrimary !== null && uPrimary > V.wideRangeU && mvLow !== null;
+
   let fsv: number | null = null;
   let maxLoan: number | null = null;
   if (mv !== null && mv > 0) {
     fsv = mv * FSV_RATIO;
-    maxLoan = mv * ltvCap;
+    maxLoan = (wideRange ? mvLow! : mv) * ltvCap;
+    if (mvLow !== null && mvHigh !== null)
+      lines.push({ label: 'Value range (80%)', formula: method === 'LAND_BUILDING' ? 'A_land × (R ± 1.28u) + BV' : method === 'LAND_ONLY' ? 'A_land × (R ± 1.28u)' : 'BUA_valued × (R ± 1.28u)', working: `u = ${((uPrimary ?? 0) * 100).toFixed(1)}% of the rate`, result: `${inr(mvLow)} – ${inr(mvHigh)}` });
     lines.push({ label: 'Market value adopted', formula: `MV = ${METHOD_LABEL[method]}`, working: method === 'LAND_BUILDING' ? 'cost method is primary; comparison is a cross-check' : 'primary method', result: inr(mv) });
     lines.push({ label: 'Forced-sale value', formula: 'FSV = 80% × MV', working: `0.80 × ${inr(mv)}`, result: inr(fsv) });
     lines.push({
       label: 'Max eligible loan',
-      formula: 'LTV cap (usage) × MV',
-      working: `${Math.round(ltvCap * 100)}% (${USAGE_LABEL[usageForLtv]}${a.inspection.observedUsage && a.inspection.observedUsage !== p.usage ? ', lower of declared and observed' : ''}) × ${inr(mv)}`,
+      formula: wideRange ? `LTV cap (usage) × MV_low  (u ${((uPrimary ?? 0) * 100).toFixed(1)}% > ${V.wideRangeU * 100}%: sized on the lower edge)` : 'LTV cap (usage) × MV',
+      working: `${Math.round(ltvCap * 100)}% (${USAGE_LABEL[usageForLtv]}${a.inspection.observedUsage && a.inspection.observedUsage !== p.usage ? ', lower of declared and observed' : ''}) × ${inr(wideRange ? mvLow! : mv)}`,
       result: inr(maxLoan),
     });
   }
@@ -209,5 +254,9 @@ export function runValuation(a: Application, m: MeasureResult, ev: EvidenceResul
     landRate,
     builtRate,
     guidelineRate: ev.guideline,
+    mvLow,
+    mvHigh,
+    uPrimary,
+    wideRange,
   };
 }

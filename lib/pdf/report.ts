@@ -111,11 +111,12 @@ export async function downloadReport(a: Application, ev: Evaluation) {
   heading('4. Measurement');
   table(null, [
     ['Plot area (deed)', m.deedPlotSqft ? `${Math.round(m.deedPlotSqft)} sqft` : '-', 'Plot area (satellite)', m.satellitePlotSqft ? `${Math.round(m.satellitePlotSqft)} sqft` : '-'],
-    ['Built-up (measured)', m.measuredBuaSqft ? `${Math.round(m.measuredBuaSqft)} sqft` : '-', 'Built-up (approved)', m.approvedBuaSqft ? `${Math.round(m.approvedBuaSqft)} sqft` : '-'],
+    ['Built-up (floor plan)', m.planBuaSqft ? `${Math.round(m.planBuaSqft)} sqft` : '-', 'Built-up (approved)', m.approvedBuaSqft ? `${Math.round(m.approvedBuaSqft)} sqft` : '-'],
+    ['Check area', m.checkBasis === 'SATELLITE' ? `${Math.round(m.satelliteBuaSqft!)} sqft (roof ${Math.round(m.footprintSqft!)} x ${m.floorsForCheck} floors)` : m.checkBasis === 'DEED' ? `${Math.round(m.declaredBuaSqft!)} sqft (deed)` : '-', 'Measurement confidence', m.confidence ? `${m.confidence.total}/100 (delta ${m.areaDeltaPct!.toFixed(1)}%)` : '-'],
     ['Deviation vs plan', m.deviationPct !== null ? `${m.deviationPct.toFixed(1)}%` : '-', 'BUA valued', `${Math.round(m.buaValuedSqft)} sqft`],
     ['Floors seen / approved', `${a.inspection.observedFloors ?? '-'} / ${a.plan.approvedFloors ?? '-'}`, 'FSI actual / permissible', `${m.fsiActual?.toFixed(2) ?? '-'} / ${m.fsiPermissible?.toFixed(2) ?? '-'}`],
   ]);
-  if (a.rooms.length) table(['Floor', 'Room', 'L x W (ft)', 'Area (sqft)'], a.rooms.map((r) => [r.floor, r.name, `${r.lengthFt} x ${r.widthFt}`, Math.round(r.lengthFt * r.widthFt)]));
+  if (m.floorPlan.length) table(['Floor', `Area on plan (sqft, ${a.floorPlan?.basis === 'CARPET' ? 'carpet' : 'built-up'})`, 'Built-up (sqft)'], m.floorPlan.map((f) => [f.floor, Math.round(f.areaSqft).toLocaleString('en-IN'), Math.round(f.buaSqft).toLocaleString('en-IN')]));
 
   heading('5. Market evidence used');
   const used = ev.evidence.assessed.filter((x) => x.used);
@@ -126,8 +127,23 @@ export async function downloadReport(a: Application, ev: Evaluation) {
       { 5: 62 },
     );
   else table(null, [['No market evidence applied yet.']]);
-  const sc = (a.property.type === 'FLAT' || a.property.type === 'SHOP_OFFICE' ? ev.evidence.built : ev.evidence.land)?.score;
-  if (sc) table(null, [['Authenticity score', `${sc.total}/100 (agreement ${Math.round(sc.agreement)}, depth ${sc.depth}, recency ${Math.round(sc.recency)}, spatial ${sc.spatial})`]]);
+  const unitType = a.property.type === 'FLAT' || a.property.type === 'SHOP_OFFICE';
+  const pc = unitType ? ev.evidence.built : ev.evidence.land;
+  const fr = unitType ? ev.rates.BUILT : ev.rates.LAND;
+  if (pc) {
+    const rs = (n: number) => `Rs. ${Math.round(n).toLocaleString('en-IN')}`;
+    const rows: string[][] = [
+      ['Per source kind', pc.rows.map((r) => `${KIND_LABEL[r.kind]}: ${rs(r.rate)}/sqft, n ${r.n} (n_eff ${r.nEff.toFixed(1)}), sigma ${(r.sigmaRel * 100).toFixed(1)}%, weight ${(r.weight * 100).toFixed(0)}%`).join('; ')],
+      ['Local vs wider', pc.local ? `T1 ${rs(pc.local.rate)} (n_eff ${pc.nEffT1.toFixed(1)}), all tiers ${rs(pc.all.rate)}; Z = ${pc.z.toFixed(2)}` : `No same-locality points; all tiers ${rs(pc.all.rate)}`],
+      ['Market rate (80% range)', `${rs(pc.rate)}/sqft (${rs(pc.low)} - ${rs(pc.high)}), u ${(pc.u * 100).toFixed(1)}%${pc.thinMarket ? ' - thin market' : ''}`],
+    ];
+    if (fr?.guideline) rows.push(['Government value', `${rs(fr.guideline.rate)}/sqft ${fr.guideline.official ? `(IGRS Telangana, ${fr.guideline.ref?.locality ?? ''}, effective ${fr.guideline.ref?.effectiveDate ?? '-'}) - floor` : '(web search) - check only'}`]);
+    if (fr?.purchase) rows.push(['Purchase price, indexed', `${rs(fr.purchase.rate)}/sqft after ${fr.purchase.years.toFixed(1)} years, u ${(fr.purchase.u * 100).toFixed(1)}%, weight ${(fr.wPurchase * 100).toFixed(0)}%`]);
+    if (fr) rows.push(['Rate used', `${rs(fr.rate)}/sqft (${rs(fr.low)} - ${rs(fr.high)})${fr.floorApplied ? ' - held at the government value' : ''}`]);
+    const sc = pc.score;
+    rows.push(['Authenticity score', `${sc.total}/100 (agreement ${sc.agreement.toFixed(1)}, depth ${sc.depth.toFixed(1)}, recency ${sc.recency.toFixed(1)}, spatial ${sc.spatial.toFixed(1)})`]);
+    table(null, rows);
+  }
 
   heading('6. Site inspection (video call)');
   table(null, [['Geo-fence', ev.geofence.summary]]);

@@ -4,8 +4,9 @@
    the customer status view and the dashboard list.
    ------------------------------------------------------------------ */
 import type { Application, ApplicationSummary, CustomerView, Stage, StageState } from '@/lib/domain/types';
-import { assignedSnapshots, isBuilt, PROPERTY_TYPE_LABEL } from '@/lib/domain/catalog';
+import { assignedSnapshots, isBuilt, isUnit, PROPERTY_TYPE_LABEL } from '@/lib/domain/catalog';
 import { runEvidence, type EvidenceResult } from './evidence';
+import { finalRates, purchaseComponent, type FinalRates } from './purchase';
 import { liveLocation, MIN_EXTERIOR_SNAPSHOTS, runGeofence, type GeofenceResult } from './geofence';
 import { runMeasure, type MeasureResult } from './measure';
 import { runSanity, VERDICT_LABEL, type SanityResult } from './sanity';
@@ -17,6 +18,8 @@ export interface Evaluation {
   live: ReturnType<typeof liveLocation>;
   measure: MeasureResult;
   evidence: EvidenceResult;
+  /** Final rates per category: market (B) + purchase price (C), official floor (A). */
+  rates: FinalRates;
   valuation: ValuationResult;
   sanity: SanityResult;
   stages: Stage[];
@@ -34,8 +37,8 @@ function stages(a: Application, g: GeofenceResult, m: MeasureResult, v: Valuatio
   const inspDone = g.status === 'PASS' && (!built || g.interiorInside > 0);
   const inspState: StageState = inspDone ? 'DONE' : snaps > 0 ? 'IN_PROGRESS' : 'ACTION_NEEDED';
 
-  const measureDone = built ? m.floorsMeasured > 0 && m.landAreaSqft !== null : m.landAreaSqft !== null && a.parcel.length >= 3;
-  const measureState: StageState = measureDone ? 'DONE' : a.rooms.length || a.parcel.length ? 'IN_PROGRESS' : 'NOT_STARTED';
+  const measureDone = built ? m.floorsWithArea > 0 && m.confidence !== null && (isUnit(a.property.type) || m.landAreaSqft !== null) : m.landAreaSqft !== null && a.parcel.length >= 3;
+  const measureState: StageState = measureDone ? 'DONE' : m.floorsWithArea || a.parcel.length || (a.footprint?.length ?? 0) ? 'IN_PROGRESS' : 'NOT_STARTED';
 
   const valState: StageState = v.ready ? 'DONE' : a.market.fetchedAt || a.market.points.length ? 'IN_PROGRESS' : 'NOT_STARTED';
   const issued = a.review.status === 'ISSUED';
@@ -61,7 +64,9 @@ function stages(a: Application, g: GeofenceResult, m: MeasureResult, v: Valuatio
       key: 'MEASUREMENT',
       label: 'Measurement',
       state: measureState,
-      detail: built ? `${m.floorsMeasured} floor(s) measured · land ${m.landAreaSqft ? Math.round(m.landAreaSqft) + ' sqft' : 'n/a'}` : `Plot ${m.landAreaSqft ? Math.round(m.landAreaSqft) + ' sqft' : 'n/a'}`,
+      detail: built
+        ? `${m.floorsWithArea} floor(s) from the floor plan${m.confidence ? ` · confidence ${m.confidence.total}/100` : ''} · land ${m.landAreaSqft ? Math.round(m.landAreaSqft) + ' sqft' : 'n/a'}`
+        : `Plot ${m.landAreaSqft ? Math.round(m.landAreaSqft) + ' sqft' : 'n/a'}`,
       customerNote: measureState === 'DONE' ? 'Measurement completed.' : measureState === 'IN_PROGRESS' ? 'Measurement in progress.' : 'Will start after the video inspection.',
     },
     {
@@ -85,10 +90,12 @@ export function evaluate(a: Application, now = new Date()): Evaluation {
   const pin = a.property.lat !== null && a.property.lng !== null ? { lat: a.property.lat, lng: a.property.lng } : null;
   const geofence = runGeofence(assignedSnapshots(a.inspection.snapshots), pin, a.parcel);
   const measure = runMeasure(a);
-  const evidence = runEvidence(a.market.points, pin, now);
-  const valuation = runValuation(a, measure, evidence);
-  const sanity = runSanity(a, measure, geofence, evidence, valuation, now);
-  return { pin, geofence, live: liveLocation(a.inspection.track, pin, a.parcel), measure, evidence, valuation, sanity, stages: stages(a, geofence, measure, valuation) };
+  const p = a.property;
+  const evidence = runEvidence(a.market.points, pin, now, { type: p.type, usage: p.usage, locality: p.locality, city: p.city });
+  const rates = finalRates(evidence, purchaseComponent(a, measure, now));
+  const valuation = runValuation(a, measure, evidence, rates);
+  const sanity = runSanity(a, measure, geofence, evidence, valuation, now, rates);
+  return { pin, geofence, live: liveLocation(a.inspection.track, pin, a.parcel), measure, evidence, rates, valuation, sanity, stages: stages(a, geofence, measure, valuation) };
 }
 
 export function toCustomerView(a: Application, now = new Date()): CustomerView {

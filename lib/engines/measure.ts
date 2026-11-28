@@ -1,40 +1,40 @@
 /* ------------------------------------------------------------------
-   Measurement (PRD_V3 §4.2, §5.3) — pure.
-   Plot: deed area vs satellite polygon area.
-   Building: rooms measured on the video call → carpet → built-up → vs approved plan.
+   Measurement — pure.
+   Plot: deed area vs satellite plot boundary.
+   Building: floor-wise areas taken from the floor plan (government copy or
+   customer upload), checked against the satellite top view:
+     expected BUA = roof footprint (drawn on the satellite image) × floors
+     delta       = (plan total − expected) ÷ expected
+   The delta, the floor count and the plan's source give a measurement
+   confidence score (0–100). Units (flat / shop) sit in a larger building, so
+   their plan area is checked against the deed area instead.
    ------------------------------------------------------------------ */
-import type { Application, Room } from '@/lib/domain/types';
-import { floorNames, isBuilt } from '@/lib/domain/catalog';
+import type { Application, DocSlot } from '@/lib/domain/types';
+import { FLOOR_PLAN_DOC, isBuilt, isUnit } from '@/lib/domain/catalog';
+import { VALUATION as V } from '@/config/valuation';
 import { polygonAreaSqm, SQFT_PER_SQM } from './stats';
-
-export const REFERENCE_OBJECTS = {
-  DOOR_HEIGHT: { label: 'Door height (7 ft)', ft: 7.0 },
-  DOOR_WIDTH: { label: 'Door width (3 ft)', ft: 3.0 },
-  A4_LONG: { label: 'A4 sheet, long side (11.7 in)', ft: 0.974 },
-  TILE_2FT: { label: 'Floor tile (2 ft)', ft: 2.0 },
-  BRICK: { label: 'Brick length (9 in)', ft: 0.75 },
-} as const;
-export type ReferenceObjectId = keyof typeof REFERENCE_OBJECTS | 'CUSTOM';
 
 /** Carpet → built-up loading (walls, ducts, staircase share). */
 export const CARPET_TO_BUA = 1.2;
 export const PLOT_AREA_TOLERANCE_PCT = 10;
 
-export const pixelDistance = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y);
-
-/** Known-object monocular scaling: length_ft = target_px × (reference_ft / reference_px). */
-export function knownObjectLengthFt(targetPx: number, referencePx: number, referenceFt: number): number {
-  if (referencePx <= 0) throw new RangeError('Reference length must be > 0 px');
-  return targetPx * (referenceFt / referencePx);
+export interface FloorPlanRow {
+  floor: string;
+  /** As printed on the plan. */
+  areaSqft: number;
+  /** Built-up (carpet × 1.2 when the plan prints carpet). */
+  buaSqft: number;
 }
 
-export const roomArea = (r: Room) => Math.max(0, r.lengthFt) * Math.max(0, r.widthFt);
-
-export interface FloorMeasure {
-  floor: string;
-  rooms: number;
-  carpetSqft: number;
-  buaSqft: number;
+export interface AreaConfidence {
+  /** 0–70 from |delta|: ≤ 5% full, ≥ 30% zero. */
+  agreement: number;
+  /** 0–15: floors on the plan = floors seen on the call (8 if only the declaration matches). */
+  floors: number;
+  /** 0–15: government copy / customer upload, verified or not. */
+  source: number;
+  total: number;
+  band: 'HIGH' | 'MEDIUM' | 'LOW';
 }
 
 export interface MeasureResult {
@@ -43,13 +43,26 @@ export interface MeasureResult {
   plotVariancePct: number | null;
   /** min(deed, satellite) — conservative land area. */
   landAreaSqft: number | null;
-  floors: FloorMeasure[];
-  carpetSqft: number;
-  measuredBuaSqft: number | null;
+  /** Floor-wise areas from the floor plan. */
+  floorPlan: FloorPlanRow[];
+  /** Σ floor-wise built-up area from the plan. */
+  planBuaSqft: number | null;
   declaredBuaSqft: number | null;
-  /** Actual BUA used for checks: measured if rooms measured, else declared. */
+  /** Roof outline area on the satellite top view. */
+  footprintSqft: number | null;
+  /** Floors multiplied with the footprint, and where that count came from. */
+  floorsForCheck: number | null;
+  floorsBasis: 'OBSERVED' | 'DECLARED' | 'PLAN' | null;
+  /** footprint × floors (buildings) — the independent estimate. */
+  satelliteBuaSqft: number | null;
+  /** What the plan total was checked against. */
+  checkBasis: 'SATELLITE' | 'DEED' | null;
+  /** (plan total − check area) ÷ check area × 100. */
+  areaDeltaPct: number | null;
+  confidence: AreaConfidence | null;
+  /** Actual BUA used for the checks: floor plan if entered, else declared. */
   actualBuaSqft: number | null;
-  actualBuaBasis: 'MEASURED' | 'DECLARED' | 'NONE';
+  actualBuaBasis: 'FLOOR_PLAN' | 'DECLARED' | 'NONE';
   approvedBuaSqft: number | null;
   deviationPct: number | null;
   /** Only the approved structure is mortgageable. */
@@ -60,30 +73,64 @@ export interface MeasureResult {
   floorsDeclared: number | null;
   floorsObserved: number | null;
   floorsApproved: number | null;
-  floorsMeasured: number;
+  /** Floors with an area on the plan. */
+  floorsWithArea: number;
+}
+
+/** Agreement points from the delta (fraction, either sign). */
+export function areaAgreement(delta: number): number {
+  const d = Math.abs(delta);
+  const { fullAt, zeroAt, points } = V.floorArea;
+  return d <= fullAt ? points.agreement : d >= zeroAt ? 0 : points.agreement * (1 - (d - fullAt) / (zeroAt - fullAt));
+}
+
+function sourcePoints(a: Application): number {
+  const src = a.floorPlan?.source;
+  if (!src) return 0;
+  const slot = (k: string): DocSlot | undefined => a.documents.find((d) => d.key === k);
+  const doc = slot(FLOOR_PLAN_DOC[src]) ?? slot('APPROVED_PLAN');
+  const verified = doc?.status === 'VERIFIED';
+  const s = V.floorArea.source;
+  return src === 'GOVT_PORTAL' ? (verified ? s.GOVT_VERIFIED : s.GOVT) : verified ? s.CUSTOMER_VERIFIED : s.CUSTOMER;
 }
 
 export function runMeasure(a: Application): MeasureResult {
   const p = a.property;
   const built = isBuilt(p.type);
+  const unit = isUnit(p.type);
   const deed = p.plotAreaSqft && p.plotAreaSqft > 0 ? p.plotAreaSqft : null;
   const sat = a.parcel.length >= 3 ? polygonAreaSqm(a.parcel) * SQFT_PER_SQM : null;
   const variance = deed && sat ? ((sat - deed) / deed) * 100 : null;
   const landAreaSqft = deed && sat ? Math.min(deed, sat) : (deed ?? sat);
 
-  const names = floorNames(p.floors);
-  const extra = [...new Set(a.rooms.map((r) => r.floor))].filter((f) => !names.includes(f));
-  const floors: FloorMeasure[] = [...names, ...extra]
-    .map((f) => {
-      const rs = a.rooms.filter((r) => r.floor === f);
-      const carpet = rs.reduce((s, r) => s + roomArea(r), 0);
-      return { floor: f, rooms: rs.length, carpetSqft: carpet, buaSqft: carpet * CARPET_TO_BUA };
-    })
-    .filter((f) => f.rooms > 0 || names.includes(f.floor));
-  const carpetSqft = floors.reduce((s, f) => s + f.carpetSqft, 0);
-  const measuredBuaSqft = carpetSqft > 0 ? carpetSqft * CARPET_TO_BUA : null;
+  // Floor-wise areas from the floor plan.
+  const fp = a.floorPlan;
+  const loading = fp?.basis === 'CARPET' ? CARPET_TO_BUA : 1;
+  const floorPlan: FloorPlanRow[] = built ? (fp?.floors ?? []).filter((f) => f.areaSqft > 0).map((f) => ({ floor: f.floor, areaSqft: f.areaSqft, buaSqft: f.areaSqft * loading })) : [];
+  const planBuaSqft = floorPlan.length ? floorPlan.reduce((s, f) => s + f.buaSqft, 0) : null;
   const declared = p.builtUpSqft && p.builtUpSqft > 0 ? p.builtUpSqft : null;
-  const actual = built ? (measuredBuaSqft ?? declared) : null;
+
+  // Independent check: roof footprint × floors (buildings) or the deed area (units).
+  const footprintSqft = built && !unit && (a.footprint?.length ?? 0) >= 3 ? polygonAreaSqm(a.footprint!) * SQFT_PER_SQM : null;
+  const observed = a.inspection.observedFloors;
+  const floorsForCheck = observed ?? p.floors ?? (floorPlan.length || null);
+  const floorsBasis = observed ? 'OBSERVED' : p.floors ? 'DECLARED' : floorPlan.length ? 'PLAN' : null;
+  const satelliteBuaSqft = footprintSqft && floorsForCheck ? footprintSqft * floorsForCheck : null;
+  const checkArea = unit ? declared : satelliteBuaSqft;
+  const checkBasis = !built ? null : unit ? (declared ? 'DEED' : null) : satelliteBuaSqft ? 'SATELLITE' : null;
+  const delta = planBuaSqft && checkArea ? (planBuaSqft - checkArea) / checkArea : null;
+
+  let confidence: AreaConfidence | null = null;
+  if (delta !== null) {
+    const agreement = areaAgreement(delta);
+    const planFloors = floorPlan.length;
+    const floors = unit ? V.floorArea.points.floors : observed ? (observed === planFloors ? V.floorArea.points.floors : 0) : p.floors === planFloors ? V.floorArea.floorsDeclaredOnly : 0;
+    const source = sourcePoints(a);
+    const total = Math.round(agreement + floors + source);
+    confidence = { agreement, floors, source, total, band: total >= V.floorArea.pass ? 'HIGH' : total >= V.floorArea.warn ? 'MEDIUM' : 'LOW' };
+  }
+
+  const actual = built ? (planBuaSqft ?? declared) : null;
   const approved = a.plan.approvedBuaSqft && a.plan.approvedBuaSqft > 0 ? a.plan.approvedBuaSqft : null;
   const deviationPct = actual && approved ? ((actual - approved) / approved) * 100 : null;
 
@@ -93,25 +140,31 @@ export function runMeasure(a: Application): MeasureResult {
     if (!approved) buaValuedBasis = 'No approved plan on record — building not valued (land only)';
     else if (!actual) {
       buaValuedSqft = approved;
-      buaValuedBasis = 'Approved BUA (no measurement or declaration yet)';
+      buaValuedBasis = 'Approved BUA (no floor plan or declaration yet)';
     } else {
       buaValuedSqft = Math.min(actual, approved);
-      buaValuedBasis = actual > approved ? 'Approved BUA — area built beyond the plan is not valued' : `${measuredBuaSqft ? 'Measured' : 'Declared'} BUA (within the approved plan)`;
+      buaValuedBasis = actual > approved ? 'Approved BUA — area built beyond the plan is not valued' : `${planBuaSqft ? 'Floor-plan' : 'Declared'} BUA (within the approved plan)`;
     }
   }
 
-  const fsiActual = built && actual && landAreaSqft && p.type !== 'FLAT' && p.type !== 'SHOP_OFFICE' ? actual / landAreaSqft : null;
+  const fsiActual = built && actual && landAreaSqft && !unit ? actual / landAreaSqft : null;
   return {
     deedPlotSqft: deed,
     satellitePlotSqft: sat,
     plotVariancePct: variance,
     landAreaSqft,
-    floors,
-    carpetSqft,
-    measuredBuaSqft,
+    floorPlan,
+    planBuaSqft,
     declaredBuaSqft: declared,
+    footprintSqft,
+    floorsForCheck: unit ? null : floorsForCheck,
+    floorsBasis: unit ? null : floorsBasis,
+    satelliteBuaSqft,
+    checkBasis,
+    areaDeltaPct: delta === null ? null : delta * 100,
+    confidence,
     actualBuaSqft: actual,
-    actualBuaBasis: !built ? 'NONE' : measuredBuaSqft ? 'MEASURED' : declared ? 'DECLARED' : 'NONE',
+    actualBuaBasis: !built ? 'NONE' : planBuaSqft ? 'FLOOR_PLAN' : declared ? 'DECLARED' : 'NONE',
     approvedBuaSqft: approved,
     deviationPct,
     buaValuedSqft,
@@ -119,8 +172,8 @@ export function runMeasure(a: Application): MeasureResult {
     fsiActual,
     fsiPermissible: a.plan.permissibleFsi && a.plan.permissibleFsi > 0 ? a.plan.permissibleFsi : null,
     floorsDeclared: p.floors,
-    floorsObserved: a.inspection.observedFloors,
+    floorsObserved: observed,
     floorsApproved: a.plan.approvedFloors,
-    floorsMeasured: floors.filter((f) => f.rooms > 0).length,
+    floorsWithArea: floorPlan.length,
   };
 }

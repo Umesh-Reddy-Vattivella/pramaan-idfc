@@ -1,0 +1,4 @@
+{
+  "source": "RBI quarterly House Price Index (base 2010-11 = 100). Not loaded yet: add each city's quarterly values as \"YYYY-Qn\": value. 'ALL_INDIA' is the fallback series.",
+  "series": {}
+}

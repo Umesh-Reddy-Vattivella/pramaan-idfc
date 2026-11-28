@@ -3,8 +3,10 @@
    Each check: PASS | WARN | BLOCKER | PENDING, with the action that clears it.
    ------------------------------------------------------------------ */
 import type { Application, DocSlot } from '@/lib/domain/types';
-import { isBuilt, USAGE_LABEL } from '@/lib/domain/catalog';
+import { isBuilt, isUnit, USAGE_LABEL } from '@/lib/domain/catalog';
+import { VALUATION as V } from '@/config/valuation';
 import { registrationCheck, type EvidenceResult } from './evidence';
+import type { FinalRates } from './purchase';
 import type { GeofenceResult } from './geofence';
 import { MIN_EXTERIOR_SNAPSHOTS } from './geofence';
 import type { MeasureResult } from './measure';
@@ -26,8 +28,7 @@ export const TITLE_CHAIN_YEARS = 13;
 export const BUA_WARN_PCT = 10;
 export const BUA_BLOCK_PCT = 30;
 export const FSI_BLOCK_OVER_PCT = 10;
-export const MIN_COMPARABLES = 3;
-export const MIN_SCORE = 60;
+export const MIN_SCORE = V.t13.minScore;
 export const MIN_RESIDUAL_LIFE = 20;
 
 export type Verdict = 'REFER' | 'IN_PROGRESS' | 'CONDITIONS' | 'CLEAR';
@@ -50,7 +51,9 @@ export interface SanityResult {
   verdict: Verdict;
 }
 
-export function runSanity(a: Application, m: MeasureResult, g: GeofenceResult, ev: EvidenceResult, v: ValuationResult, now: Date): SanityResult {
+const inrN = (n: number) => `₹${Math.round(n).toLocaleString('en-IN')}`;
+
+export function runSanity(a: Application, m: MeasureResult, g: GeofenceResult, ev: EvidenceResult, v: ValuationResult, now: Date, rates?: FinalRates): SanityResult {
   const c: Check[] = [];
   const built = isBuilt(a.property.type);
 
@@ -132,16 +135,46 @@ export function runSanity(a: Application, m: MeasureResult, g: GeofenceResult, e
       finding: !m.approvedBuaSqft
         ? 'Approved built-up area not entered.'
         : !m.actualBuaSqft
-          ? 'Actual built-up area not known yet (measure rooms on the video call).'
-          : `${m.actualBuaBasis === 'MEASURED' ? 'Measured' : 'Declared'} ${Math.round(m.actualBuaSqft)} sqft vs approved ${Math.round(m.approvedBuaSqft)} sqft (${dev! > 0 ? '+' : ''}${dev!.toFixed(1)}%).`,
+          ? 'Actual built-up area not known yet (enter the floor-wise areas from the floor plan).'
+          : `${m.actualBuaBasis === 'FLOOR_PLAN' ? 'Floor plan' : 'Declared'} ${Math.round(m.actualBuaSqft)} sqft vs approved ${Math.round(m.approvedBuaSqft)} sqft (${dev! > 0 ? '+' : ''}${dev!.toFixed(1)}%).`,
       action: !m.approvedBuaSqft
         ? 'Enter the approved BUA from the plan.'
         : !m.actualBuaSqft
-          ? 'Measure the rooms during the video call.'
+          ? 'Enter the floor-wise areas from the floor plan (Inspection & measurement).'
           : dev! > BUA_BLOCK_PCT
             ? 'Deviation beyond 30% — demolition / regularisation risk. Obtain regularisation or refer for physical inspection.'
             : dev! > BUA_WARN_PCT
               ? 'Only the approved area is valued. Record the deviation as a remark.'
+              : undefined,
+    });
+
+    // T23 floor-plan area vs the satellite top view × floors (units: vs the deed area).
+    const unitT = isUnit(a.property.type);
+    const cf = m.confidence;
+    const sq = (n: number) => `${Math.round(n).toLocaleString('en-IN')} sqft`;
+    const vs = unitT ? `deed ${m.declaredBuaSqft ? sq(m.declaredBuaSqft) : '—'}` : `satellite ${m.satelliteBuaSqft ? sq(m.satelliteBuaSqft) : '—'} (roof ${m.footprintSqft ? sq(m.footprintSqft) : '—'} × ${m.floorsForCheck ?? '?'} floor(s) ${m.floorsBasis === 'OBSERVED' ? 'seen on the call' : m.floorsBasis === 'DECLARED' ? 'declared' : 'on the plan'})`;
+    const d = m.areaDeltaPct;
+    c.push({
+      id: 'T23',
+      title: unitT ? 'Floor-plan area vs deed area' : 'Floor-plan area vs satellite top view',
+      status: !m.planBuaSqft || !cf ? 'PENDING' : cf.total >= V.floorArea.pass ? 'PASS' : cf.total >= V.floorArea.warn ? 'WARN' : 'BLOCKER',
+      finding: !m.planBuaSqft
+        ? 'Floor-wise areas from the floor plan not entered yet.'
+        : !cf
+          ? unitT
+            ? 'Deed built-up area not entered — nothing to check the plan against.'
+            : 'Roof outline not drawn on the satellite top view yet.'
+          : `Plan ${sq(m.planBuaSqft)} vs ${vs}: ${d! > 0 ? '+' : ''}${d!.toFixed(1)}%. Confidence ${cf.total}/100 (agreement ${cf.agreement.toFixed(0)}, floors ${cf.floors}, source ${cf.source}).${!unitT && d! < -10 ? ' More is built than the plan shows — possible extension beyond the plan.' : !unitT && d! > 10 ? ' The plan shows more area than is visible from above.' : ''}`,
+      action: !m.planBuaSqft
+        ? 'Enter each floor’s area from the floor plan (government copy or customer upload).'
+        : !cf
+          ? unitT
+            ? 'Enter the built-up area from the deed (Identification → Facts).'
+            : 'Draw the building’s roof outline on the satellite image (Inspection & measurement).'
+          : cf.total < V.floorArea.warn
+            ? 'Plan and top view disagree strongly — refer for physical measurement before sanction.'
+            : cf.total < V.floorArea.pass
+              ? 'Confirm the floor count and any extensions on the video call; verify the floor plan document.'
               : undefined,
     });
 
@@ -195,24 +228,52 @@ export function runSanity(a: Application, m: MeasureResult, g: GeofenceResult, e
     });
   }
 
-  // T13 evidence depth
-  const primary = a.property.type === 'FLAT' || a.property.type === 'SHOP_OFFICE' ? ev.built : ev.land;
+  // T13 market evidence depth (v2): score >= 60 and n_eff >= 3 pass; thin market or u / R above 25% blocks.
+  const unit = isUnit(a.property.type);
+  const primary = unit ? ev.built : ev.land;
+  const pf = rates ? (unit ? rates.BUILT : rates.LAND) : null;
+  const pu = pf?.u ?? primary?.u ?? 0;
+  const t13: Check['status'] = !primary ? 'PENDING' : primary.nEffT1T2 < V.t13.blockNeffT1T2 || pu > V.t13.blockU ? 'BLOCKER' : primary.score.total < V.t13.minScore || primary.nEff < V.t13.minNeff ? 'WARN' : 'PASS';
   c.push({
     id: 'T13',
     title: 'Market evidence depth',
-    status: !primary ? 'PENDING' : primary.n < MIN_COMPARABLES || primary.score.total < MIN_SCORE ? 'WARN' : 'PASS',
-    finding: !primary ? 'No market evidence applied yet.' : `${primary.n} usable comparable(s); Authenticity Score ${primary.score.total}/100.`,
-    action: !primary ? 'Fetch market evidence around the property (Valuation tab).' : primary.n < MIN_COMPARABLES || primary.score.total < MIN_SCORE ? 'Add registered sales (Index II) near the property; BAANKNET auction listings help as a cross-check.' : undefined,
+    status: t13,
+    finding: !primary
+      ? 'No market evidence applied yet.'
+      : `${primary.n} point(s), n_eff ${primary.nEff.toFixed(1)} (T1 + T2: ${primary.nEffT1T2.toFixed(1)}); u ${(pu * 100).toFixed(1)}% of the rate; Authenticity Score ${primary.score.total}/100.${primary.thinMarket ? ' Thin market.' : ''}`,
+    action: !primary
+      ? 'Fetch market evidence around the property (Valuation tab).'
+      : t13 === 'BLOCKER'
+        ? 'Too little local evidence or too wide a range — physical inspection / valuer check before sanction.'
+        : t13 === 'WARN'
+          ? 'Add registered sales (Index II / EC) or listings in the same locality.'
+          : undefined,
   });
 
-  // T14 guideline floor
-  if (ev.guideline && ev.land) {
+  // T14 guideline-rate floor: the market rate (before any floor) vs the government value.
+  const gv = unit ? ev.guidelines.BUILT : ev.guidelines.LAND;
+  const marketRate = pf ? pf.blended : primary?.rawRate;
+  if (gv && marketRate) {
+    const src = gv.official ? `official ${gv.ref?.basis === 'APARTMENT' ? 'apartment' : 'land'} value (IGRS Telangana, ${gv.ref?.locality ?? ''})` : 'guideline rate from web search';
     c.push({
       id: 'T14',
       title: 'Guideline-rate floor',
-      status: ev.land.rate >= ev.guideline ? 'PASS' : 'WARN',
-      finding: `Land rate ₹${ev.land.rate.toLocaleString('en-IN')}/sqft vs guideline ₹${ev.guideline.toLocaleString('en-IN')}/sqft (${(ev.land.rate / ev.guideline).toFixed(2)}×).`,
-      action: ev.land.rate < ev.guideline ? 'Market rate below the government guideline — re-check comparables.' : undefined,
+      status: marketRate >= gv.rate ? 'PASS' : 'WARN',
+      finding: `${unit ? 'Built' : 'Land'} rate ${inrN(marketRate)}/sqft vs ${src} ${inrN(gv.rate)}/sqft (${(marketRate / gv.rate).toFixed(2)}×).${pf?.floorApplied ? ' Floor applied: the government value is used.' : ''}`,
+      action: marketRate < gv.rate ? (gv.official ? 'Market evidence reads below the government value — re-check comparables; the value is held at the floor.' : 'Market rate below the government guideline — re-check comparables.') : undefined,
+    });
+  }
+
+  // T18 local premium: the same-locality rate differs from the wider rate while local evidence is thin.
+  if (primary?.local && primary.nEffT1 < V.localPremium.maxNeffT1) {
+    const ratio = primary.local.rate / primary.all.rate;
+    const off = ratio < V.localPremium.min || ratio > V.localPremium.max;
+    c.push({
+      id: 'T18',
+      title: 'Local premium',
+      status: off ? 'WARN' : 'PASS',
+      finding: `Same-locality rate ${inrN(primary.local.rate)} vs all tiers ${inrN(primary.all.rate)} (${ratio.toFixed(2)}×) with n_eff(T1) ${primary.nEffT1.toFixed(1)}.`,
+      action: off ? 'Few local points disagree with the wider area — confirm the locality premium / discount with a registered sale.' : undefined,
     });
   }
 
@@ -235,11 +296,41 @@ export function runSanity(a: Application, m: MeasureResult, g: GeofenceResult, e
       id: 'T17',
       title: 'Registered sales vs government value',
       status: rc.below.length ? 'WARN' : 'PASS',
-      finding: rc.below.length
-        ? `${rc.below.length} of ${rc.compared} registered sale(s) declare a price below the government value on the deed (lowest ${Math.round(worst!.ratio * 100)}%: ${worst!.title}).`
-        : `All ${rc.compared} registered sale(s) declare a price at or above the government value.`,
+      finding:
+        (rc.below.length
+          ? `${rc.below.length} of ${rc.compared} registered sale(s) declare a price below the government value on the deed (lowest ${Math.round(worst!.ratio * 100)}%: ${worst!.title}).`
+          : `None of the ${rc.compared} registered sale(s) declares a price below the government value.`) + ` ${rc.atGuideline} of ${rc.compared} declared at the government value (±${V.atGuidelineBand * 100}%) — kept out of the rate.`,
       action: rc.below.length ? 'Possible under-declaration — confirm these sales or exclude them from the rate.' : undefined,
     });
+  }
+
+  // T20 customer's claimed value (cross-check only).
+  const claim = a.ownership?.claimedValueInr;
+  if (claim && v.mv) {
+    const gap = (claim - v.mv) / v.mv;
+    c.push({
+      id: 'T20',
+      title: "Customer's claimed value",
+      status: gap > V.claimGapWarn ? 'WARN' : 'PASS',
+      finding: `Claimed ${inrN(claim)} vs MV ${inrN(v.mv)} (${gap >= 0 ? '+' : ''}${(gap * 100).toFixed(0)}%). Never used in the value.`,
+      action: gap > V.claimGapWarn ? 'Claim well above the valuation — the customer may overstate, or comparables missed a feature (main-road frontage, corner plot). Underwriter to review.' : undefined,
+    });
+  }
+
+  // T21 own purchase price, indexed, vs the market rate.
+  const pc = rates?.purchase;
+  const pcf = pc?.applicable && pc.category ? rates![pc.category] : null;
+  if (pc?.applicable && pcf && pcf.divergence !== null) {
+    const off = pcf.divergence > V.purchase.divergenceWarn;
+    c.push({
+      id: 'T21',
+      title: 'Own purchase price, indexed',
+      status: off ? 'WARN' : 'PASS',
+      finding: `Purchase price brought to today ${inrN(pc.rate)}/sqft vs market ${inrN(pcf.market.rawRate)}/sqft (${(pcf.divergence * 100).toFixed(0)}% apart); weight in the rate ${(pcf.wPurchase * 100).toFixed(0)}%.`,
+      action: off ? 'Declared price and listings disagree by more than 30% — check the sale deed, or what the listings missed.' : undefined,
+    });
+  } else if (pc && !pc.applicable) {
+    c.push({ id: 'T21', title: 'Own purchase price, indexed', status: 'PENDING', finding: pc.reason ?? 'Purchase price incomplete.', action: 'Complete the purchase details (Identification → Facts).' });
   }
 
   // T16 rejected documents

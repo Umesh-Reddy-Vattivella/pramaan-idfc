@@ -10,6 +10,7 @@ import { api } from '@/lib/client/api';
 import AddressAutocomplete, { type PickedPlace } from '@/components/AddressAutocomplete';
 import { SpecMap } from '@/components/workbench/maps';
 import { Badge, Card, Field } from '@/components/ui';
+import OwnershipFields, { draftOf, ownershipOf } from '@/components/bank/OwnershipFields';
 
 const TYPES: { t: PropertyType; icon: typeof Home }[] = [
   { t: 'HOUSE', icon: Home },
@@ -38,6 +39,7 @@ export default function NewApplication() {
   const [floors, setFloors] = useState('1');
   const [age, setAge] = useState('');
   const [rate, setRate] = useState('');
+  const [own, setOwn] = useState(() => draftOf());
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -86,6 +88,7 @@ export default function NewApplication() {
             ageYears: built ? n(age) : null,
             constructionRate: built ? n(rate) : null,
           },
+          ownership: ownershipOf(own),
         },
       });
       router.push(`/bank/applications/${j.app.id}?created=1`);
@@ -207,6 +210,10 @@ export default function NewApplication() {
             </select>
           </Field>
         </div>
+      </Card>
+
+      <Card title="5 · Purchase price and customer’s claim (optional)" subtitle="What the customer paid is brought to today and weighted into the rate (capped at 30%). The claimed value is a cross-check only.">
+        <OwnershipFields value={own} onChange={setOwn} type={type} />
       </Card>
 
       {err && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm font-medium text-red-700">{err}</p>}

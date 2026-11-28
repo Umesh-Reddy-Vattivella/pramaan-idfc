@@ -12,6 +12,7 @@ import { api } from '@/lib/client/api';
 import type { AppCtl } from '@/lib/client/useApplication';
 import type { Application } from '@/lib/domain/types';
 import DocumentSlot from '@/components/DocumentSlot';
+import OwnershipFields, { draftOf, ownershipOf } from './OwnershipFields';
 import { SpecMap } from '@/components/workbench/maps';
 import { Card, Field, Notice } from '@/components/ui';
 
@@ -177,6 +178,7 @@ function Facts({ ctl }: { ctl: AppCtl }) {
     authority: a.plan.authority ?? '',
     chainFrom: s(a.title.chainFromYear),
   }));
+  const [own, setOwn] = useState(() => draftOf(a.ownership));
   const [saved, setSaved] = useState(false);
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     setSaved(false);
@@ -189,7 +191,8 @@ function Facts({ ctl }: { ctl: AppCtl }) {
         property: { address: f.address, plotAreaSqft: n(f.plot), builtUpSqft: n(f.bua), floors: n(f.floors), ageYears: n(f.age), constructionRate: n(f.rate), structure: f.structure as Structure, usage: f.usage as Usage },
       })) &&
       (await ctl.run({ op: 'setPlan', plan: { approvedBuaSqft: n(f.approvedBua), approvedFloors: n(f.approvedFloors), permissibleFsi: n(f.fsi), planRef: f.planRef, authority: f.authority } })) &&
-      (await ctl.run({ op: 'setTitle', title: { chainFromYear: n(f.chainFrom) } }));
+      (await ctl.run({ op: 'setTitle', title: { chainFromYear: n(f.chainFrom) } })) &&
+      (await ctl.run({ op: 'setOwnership', ownership: ownershipOf(own) }));
     setSaved(ok);
   };
   return (
@@ -273,6 +276,18 @@ function Facts({ ctl }: { ctl: AppCtl }) {
               <input className="input" value={f.authority} onChange={set('authority')} placeholder="e.g. Nagpur Municipal Corporation" />
             </Field>
           </div>
+        </div>
+        <div>
+          <div className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Purchase price and claimed value</div>
+          <OwnershipFields
+            value={own}
+            type={a.property.type}
+            onChange={(d) => {
+              setSaved(false);
+              setOwn(d);
+            }}
+          />
+          <p className="mt-2 text-[11px] text-slate-500">The price paid, brought to today, is weighted into the rate (at most 30%, less the older it is). The claimed value is only compared with the result.</p>
         </div>
         <div>
           <div className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">Title chain</div>

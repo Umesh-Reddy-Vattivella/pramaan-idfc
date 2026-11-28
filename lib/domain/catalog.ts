@@ -1,5 +1,5 @@
 /* Labels, policy constants and the document checklist per property type (PRD_V3 §4.1). */
-import type { DocFrom, DocSlot, Occupancy, PropertyType, RoomMethod, Structure, Usage } from './types';
+import type { DocFrom, DocSlot, FloorPlanSource, Occupancy, PropertyType, Structure, Usage } from './types';
 
 export const PROPERTY_TYPE_LABEL: Record<PropertyType, string> = {
   HOUSE: 'Independent house / bungalow',
@@ -43,11 +43,12 @@ export const STRUCTURE_LABEL: Record<Structure, string> = {
 
 export const OCCUPANCY_LABEL: Record<Occupancy, string> = { SELF: 'Self-occupied', RENTED: 'Rented', VACANT: 'Vacant' };
 
-export const ROOM_METHOD_LABEL: Record<RoomMethod, string> = {
-  SNAPSHOT_SCALE: 'Measured on snapshot',
-  TAPE_ON_CALL: 'Tape on video call',
-  PLAN: 'From approved plan',
+export const FLOOR_PLAN_SOURCE_LABEL: Record<FloorPlanSource, string> = {
+  GOVT_PORTAL: 'Government website (authority’s approved plan)',
+  CUSTOMER_UPLOAD: 'Uploaded by the customer',
 };
+/** Document slot holding the floor plan for each source. */
+export const FLOOR_PLAN_DOC: Record<FloorPlanSource, string> = { GOVT_PORTAL: 'APPROVED_PLAN', CUSTOMER_UPLOAD: 'FLOOR_PLAN' };
 
 /** Property types that have a building to measure and value. */
 export const isBuilt = (t: PropertyType) => t !== 'PLOT';
@@ -78,6 +79,7 @@ export const DOC_DEFS: DocDef[] = [
   { key: 'SALE_DEED', label: 'Registered sale deed', help: 'Current owner’s registered deed. Gives owner, address, survey / plot no., area and boundaries.', from: 'BANK', rule: () => 'M' },
   { key: 'TITLE_CHAIN', label: 'Chain of title documents (13 years)', help: 'All previous deeds / agreements so that ownership can be traced for the last 13 years.', from: 'EITHER', rule: () => 'M' },
   { key: 'APPROVED_PLAN', label: 'Approved / sanctioned building plan', help: 'Plan approved by the local authority. Only the approved structure can be mortgaged.', from: 'EITHER', rule: BUILT_M },
+  { key: 'FLOOR_PLAN', label: 'Floor plan (floor-wise areas)', help: 'Drawing of each floor with its area. Used for the floor-wise built-up area, checked against the satellite top view.', from: 'EITHER', rule: (t) => (isBuilt(t) ? 'R' : null) },
   { key: 'LAYOUT_PLAN', label: 'Approved layout plan', help: 'Layout approved by the planning authority showing this plot.', from: 'EITHER', rule: (t) => (t === 'PLOT' ? 'M' : null) },
   { key: 'EC', label: 'Encumbrance certificate (13 years)', help: 'Shows any existing mortgage or charge on the property.', from: 'EITHER', rule: () => 'R' },
   { key: 'LAND_RECORD', label: 'Land record extract (7/12, Patta, Khatauni, mutation)', help: 'Revenue record confirming the owner and land area.', from: 'EITHER', rule: (t) => (hasLand(t) ? 'R' : null) },
@@ -94,6 +96,12 @@ export function checklistFor(t: PropertyType): DocSlot[] {
     if (!r) return [];
     return [{ key: d.key, label: d.label, help: d.help, mandatory: r === 'M', from: d.from, files: [], status: 'PENDING' as const }];
   });
+}
+
+/** The floor-plan slot for cases opened before it existed. */
+export function floorPlanSlot(): DocSlot {
+  const d = DOC_DEFS.find((x) => x.key === 'FLOOR_PLAN')!;
+  return { key: d.key, label: d.label, help: d.help, mandatory: false, from: d.from, files: [], status: 'PENDING' };
 }
 
 export const FROM_LABEL: Record<DocFrom, string> = { BANK: 'Bank (loan file)', CUSTOMER: 'Customer', EITHER: 'Bank or customer' };
