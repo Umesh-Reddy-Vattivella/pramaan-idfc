@@ -81,8 +81,18 @@ export const CODE_RE = {
 
 /* ---------------- HTTP ---------------- */
 
+/** fetch with the network cause in the error ("fetch failed" alone says nothing). */
+async function get(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (err) {
+    const c = (err as { cause?: { code?: string; message?: string } }).cause;
+    throw new Error(`IGRS Telangana unreachable (${c?.code ?? c?.message ?? (err instanceof Error ? err.message : 'network error')}) — use the portal link and enter the rate manually`);
+  }
+}
+
 async function openSession(): Promise<{ cookie: string; html: string }> {
-  const res = await fetch(IGRS_TS_URL, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(TIMEOUT_MS), cache: 'no-store' });
+  const res = await get(IGRS_TS_URL, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(TIMEOUT_MS), cache: 'no-store' });
   if (!res.ok) throw new Error(`IGRS Telangana HTTP ${res.status}`);
   const h = res.headers as Headers & { getSetCookie?: () => string[] };
   const raw = h.getSetCookie?.() ?? [res.headers.get('set-cookie') ?? ''];
@@ -94,7 +104,7 @@ async function openSession(): Promise<{ cookie: string; html: string }> {
 }
 
 async function getText(path: string, params: Record<string, string>, cookie?: string): Promise<string> {
-  const res = await fetch(`${BASE}/${path}?${new URLSearchParams(params)}`, { headers: { 'User-Agent': UA, ...(cookie ? { Cookie: cookie } : {}), Referer: IGRS_TS_URL }, signal: AbortSignal.timeout(TIMEOUT_MS), cache: 'no-store' });
+  const res = await get(`${BASE}/${path}?${new URLSearchParams(params)}`, { headers: { 'User-Agent': UA, ...(cookie ? { Cookie: cookie } : {}), Referer: IGRS_TS_URL }, signal: AbortSignal.timeout(TIMEOUT_MS), cache: 'no-store' });
   if (!res.ok) throw new Error(`IGRS Telangana HTTP ${res.status}`);
   const t = (await res.text()).trim();
   if (t === 'Malicious' || t === 'Special') throw new Error('IGRS Telangana rejected the input');
@@ -234,7 +244,7 @@ export async function igrsRates(q: IgrsRateQuery): Promise<IgrsRateResult> {
     ];
     const encodestr = Buffer.from(JSON.stringify(Object.fromEntries(form))).toString('base64');
     const body = new URLSearchParams([['encodestr', encodestr], ...form.filter(([k]) => k !== 'encodestr')]);
-    const res = await fetch(`${BASE}/unitRateMV`, {
+    const res = await get(`${BASE}/unitRateMV`, {
       method: 'POST',
       headers: { 'User-Agent': UA, Cookie: cookie, Referer: IGRS_TS_URL, 'Content-Type': 'application/x-www-form-urlencoded' },
       body,

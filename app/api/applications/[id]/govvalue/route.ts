@@ -13,6 +13,8 @@ import { isTelangana, officialGuidelinePoint } from '@/lib/engines/govValue';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
+/** The state portal does not answer requests from outside India: run these functions in Mumbai. */
+export const preferredRegion = 'bom1';
 
 type Ctx = { params: Promise<{ id: string }> };
 const FLOORS = ['ground', 'first', 'other'] as const;

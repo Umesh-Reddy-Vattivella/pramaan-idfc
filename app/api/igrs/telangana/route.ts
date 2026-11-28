@@ -9,6 +9,8 @@ import { igrsDistricts, igrsLocalities, igrsMandals, igrsRates, igrsVillages, ty
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
+/** The state portal does not answer requests from outside India: run these functions in Mumbai. */
+export const preferredRegion = 'bom1';
 
 export async function GET(req: Request) {
   if (!(await bankSession())) return fail('Please sign in', 401);
